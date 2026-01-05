@@ -1,0 +1,88 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgis/postgis:15-3.3
+    container_name: water_dp_postgres
+    environment:
+      POSTGRES_DB: water_data
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - water_dp_network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: water_dp_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - water_dp_network
+
+  # GeoServer
+  geoserver:
+    image: kartoza/geoserver:2.22.1
+    container_name: water_dp_geoserver
+    environment:
+      - GEOSERVER_ADMIN_PASSWORD=geoserver
+      - GEOSERVER_ADMIN_USER=admin
+      - GEOSERVER_DATA_DIR=/opt/geoserver/data_dir
+    ports:
+      - "8080:8080"
+    volumes:
+      - geoserver_data:/opt/geoserver/data_dir
+    networks:
+      - water_dp_network
+
+  # Water Data Platform API
+  api:
+    build: .
+    container_name: water_dp_api
+    environment:
+      - APP_NAME=Water Data Platform
+      - DEBUG=true
+      - VERSION=1.0.0
+      - API_PREFIX=/api/v1
+      - CORS_ORIGINS=["*"]
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/water_data
+      - DATABASE_POOL_SIZE=10
+      - DATABASE_MAX_OVERFLOW=20
+      - REDIS_URL=redis://redis:6379
+      - GEOSERVER_URL=http://geoserver:8080/geoserver
+      - GEOSERVER_USERNAME=admin
+      - GEOSERVER_PASSWORD=geoserver
+      - GEOSERVER_WORKSPACE=water_data
+      - TIME_ZONE=UTC
+      - MAX_TIME_RANGE_DAYS=365
+      - SECRET_KEY=your-secret-key-change-in-production
+      - ACCESS_TOKEN_EXPIRE_MINUTES=30
+      - LOG_LEVEL=INFO
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+      - geoserver
+    volumes:
+      - ./app:/app/app
+    networks:
+      - water_dp_network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  postgres_data:
+  redis_data:
+  geoserver_data:
+
+networks:
+  water_dp_network:
+    driver: bridge
