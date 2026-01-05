@@ -9,9 +9,10 @@ A reliable Python backend for handling requests between databases, GeoServer, ti
     - **Dynamic BBOX Filtering**: Efficiently load only visible map features.
     - **Single-Item Retrieval**: Fetch individual layers and features by ID.
     - **WMS/WFS Support**: Direct integration with standard OGC services.
-- **Time Series Processing**: Advanced time series data analysis and processing.
-    - **Linkage**: Direct linking between Map Features and Water Stations (`feature.properties.station_id`).
-    - **Metadata API**: List available time series data.
+- **Time Series Processing**: Powered by **TimeIO** (Frost Server + TimescaleDB).
+    - **OGC SensorThings API**: Standardized data ingestion and management.
+    - **High Performance**: TimescaleDB for efficient time-series storage and querying.
+    - **Linkage**: Direct linking between Map Features (GeoServer) and Water Stations (`feature.properties.station_id`).
     - **Data API**: Retrieve, aggregate, and interpolate hydrological data.
 - **RESTful API**: Comprehensive REST API with automatic documentation.
 - **Data Models**: Strong typing with Pydantic V2 models (Schema) and SQLAlchemy ORM (DB).
@@ -20,30 +21,95 @@ A reliable Python backend for handling requests between databases, GeoServer, ti
 
 ## Architecture
 
+The platform follows a modern microservices-inspired architecture:
+
+### 1. Data Layer
+- **TimescaleDB**: The central database. Extends PostgreSQL to handle both:
+    - **Relational Data**: Geospatial features, application state.
+    - **Time Series Data**: High-volume sensor readings (Observations).
+- **MinIO**: S3-compatible object storage (component of TimeIO stack).
+
+### 2. TimeIO Stack (Sensor Data)
+- **Frost Server**: Implements the OGC SensorThings API standards.
+    - **Role**: Ingestion point for all sensor data.
+    - **Flow**: `Sensors -> Frost API (HTTP/MQTT) -> TimescaleDB`.
+- **Thing Management**: UI and API for managing Things, Sensors, and Datastreams.
+- **Keycloak**: IAM for securing TimeIO services.
+- **MQTT Broker**: Real-time message bus for sensor data ingestion.
+
+### 3. Application Layer
+- **FastAPI Backend (Water DP)**:
+    - **Role**: Main application logic, serving the frontend and orchestrating data.
+    - **Integration**: Queries TimescaleDB directly for analytics (anomaly detection) and lists metadata from the database.
+- **GeoServer**:
+    - **Role**: Serves geospatial maps (WMS/WFS).
+    - **Integration**: Connects to PostGIS tables in TimescaleDB to serve vector layers (e.g., rivers, regions).
+
+### 4. Visualization
+- **Grafana**:
+    - **Role**: Interactive dashboards for time-series data.
+    - **Integration**: Connects directly to TimescaleDB to visualize seeded `OBSERVATIONS`.
+
+## TimeIO Integration
+
+### Why TimeIO?
+The project integrates the [TimeIO](https://helmholtz.software/software/timeio) stack to provide a robust, standardized, and scalable solution for handling sensor data.
+1.  **Standardization**: Uses the **OGC SensorThings API** (via Frost Server) for data ingestion. This ensures interoperability and a clear schema for Things, Sensors, and Observations.
+2.  **Scalability**: Leverages **TimescaleDB** (PostgreSQL extension) for efficient storage and querying of high-frequency time-series data.
+3.  **Separation of Concerns**: Decouples data ingestion (IoT devices -> Frost) from application logic (FastAPI -> DB), allowing independent scaling.
+
+### Data Flow
+1.  **Ingestion**: 
+    - IoT devices or scripts (e.g., `seed_timeio.py`) send data to the **Frost Server** via HTTP or MQTT.
+    - Frost validates the data against the OGC model.
+2.  **Persistence**:
+    - Frost persists the data into **TimescaleDB** (`OBSERVATIONS` table).
+    - It handles efficient partitioning and indexing automatically.
+    - **MinIO** is used for object storage if needed (e.g., large metadata).
+3.  **Consumption**:
+    - **FastAPI**: Queries the `OBSERVATIONS` table directly (using raw SQL for performance) to provide analytics endpoints (e.g., `/statistics`, `/anomalies`).
+    - **Grafana**: Connects to the same DB to visualize the raw data.
+    - **GeoServer**: Joins spatial features with sensor metadata (using `station_id`) to display real-time status on maps.
+
+### Setup Details
+The entire stack is containerized in `docker-compose.yml`. Key configuration files:
+- `.env`: General application secrets.
+- `timeio.env`: Specific configuration for the TimeIO microservices (Auth, DB, MQTT).
+    - *Tip*: Use `timeio.env.example` as a template.
+- `init.sql`: Ensures `timescaledb` and `postgis` extensions are enabled on startup.
+
+```mermaid
+graph TD
+    User[User/Client] --> API[FastAPI Backend]
+    User --> GeoServer
+    User --> Grafana
+    User --> ThingMgmt[Thing Management UI]
+
+    API -->|Read/Write| DB[(TimescaleDB)]
+    GeoServer -->|Read Geo Data| DB
+    Grafana -->|Read Time Series| DB
+
+    Sensor[Sensors/Seed Script] -->|HTTP/MQTT| Frost[Frost Server]
+    Frost -->|Persist| DB
+    ThingMgmt --> Frost
+    ThingMgmt --> Frost
 ```
-water_dp/
-├── app/
-│   ├── api/                 # API endpoints (Geospatial, Time Series, Water Data)
-│   │   └── v1/
-│   │       └── endpoints/
-│   ├── core/               # Core functionality (Config, DB, Logging, Seeding)
-│   ├── models/             # SQLAlchemy Database models
-│   ├── schemas/            # Pydantic validation schemas
-│   ├── services/           # Business logic
-│   │   ├── database_service.py    # CRUD for all entities
-│   │   ├── geoserver_service.py   # GeoServer interaction
-│   │   └── time_series_service.py # Analysis logic
-│   └── main.py            # FastAPI application entry point
-├── tests/                 # Unit and integration tests
-│   ├── test_services/     # Service layer tests
-│   └── conftest.py        # Test configuration
-├── scripts/               # Utility scripts (Verification, Testing)
-├── pyproject.toml         # Poetry dependencies and config
-├── requirements.txt       # Legacy pip dependencies (if any)
-├── docker-compose.yml     # Docker services orchestration
-├── Dockerfile            # Application container definition
-└── README.md             # This file
-```
+
+## Security Considerations
+
+> [!WARNING]
+> This repository contains default configurations intended for **local development only**.
+
+### 1. Default Credentials
+The `timeio.env.example` and `timeio-realm.json` files contain default passwords (e.g., `admin/admin`). **These must be changed before deploying to any production environment.**
+
+- **Root Credentials**: `POSTGRES_PASSWORD`, `MINIO_ROOT_PASSWORD`, and `GEOSERVER_ADMIN_PASSWORD` should be randomized.
+- **Seeded Users**: The `frontendbus` and `siki` users seeded by `scripts/configure_keycloak_realm.py` are set with **temporary passwords** by default. Any login with these credentials will force an immediate password change. In production, consider removing these seeded users entirely or defining them with unique, secure secrets via environment variables.
+### 2. CORS and Redirect URIs
+- **CORS**: `CORS_ORIGINS` defaults to `*` to facilitate local development. In production, set this to the specific domain(s) of your frontend application in `.env`.
+- **CORS**: The default configuration (specifically `FROST_HTTP_CORS_ALLOWED_ORIGINS` in `docker-compose.yml`) allows `*` (all origins) or `localhost` by default. Update this for production.
+- **Keycloak**: The default `timeio-realm.json` sets `webOrigins` to `+`, allowing any origin matching redirect URIs. Overwrite this in production with specific allowed origins (e.g. `https://your-domain.com`) to prevent CORS attacks.
+- **Keycloak Redirects**: The default Keycloak configuration allows redirects to localhost ports (8000, 8080, 8082, 3000). Ensure `scripts/configure_keycloak_realm.py` or your realm configuration is updated to reflect your actual production domains and ports.
 
 ## Quick Start
 
@@ -62,24 +128,46 @@ water_dp/
    
 2. **Set up environment**
    ```bash
-   # Copy environment template
+   # Copy environment templates
    cp env.example .env
-   # Edit .env if needed (defaults usually work for local dev)
+   cp timeio.env.example timeio.env
+   
+   # Edit .env and timeio.env if needed.
+   # NOTE: timeio.env configures the entire TimeIO stack (DB, Auth, MQTT).
+
+   > [!IMPORTANT]
+   > The `timeio.env.example` file contains default credentials (e.g., `admin/admin`) for development convenience.
+   > **YOU MUST CHANGE THESE CREDENTIALS IN `timeio.env` BEFORE DEPLOYING TO A PRODUCTION ENVIRONMENT.**
+   > Failure to do so will create significant security vulnerabilities.
    ```
 
 3. **Start all services with Docker**
    ```bash
    docker-compose up -d --build
    ```
-   This will start:
-   - **Postgres (PostGIS)**: Database (Port 5432)
-   - **Redis**: Caching (Port 6379)
-   - **GeoServer**: Map Server (Port 8080)
-   - **API**: Backend Application (Port 8000)
+   This will start a comprehensive stack:
+   - **Infrastructure**: TimescaleDB (5432), MinIO, MQTT Broker (1883), Keycloak (8081).
+   - **TimeIO**: Frost API (8083), Thing Management (8082).
+   - **Application**: GeoServer (8080), FastAPI (8000), Grafana (3000).
 
-4. **Access the application**
+4. **Seed Data (Important)**
+   To populate the system with initial data (Things, Sensors, Observations, GeoServer Layers), run the reset script:
+   ```bash
+   # Make sure services are up first
+   docker-compose ps
+   
+   # Run the seeder (requires poetry)
+   poetry install
+   poetry run python -m app.reset_and_seed
+   ```
+   *This script drops existing tables, re-initializes schema, and seeds standard stations and time-series data.*
+
+5. **Access the application**
    - **API Docs**: [http://localhost:8000/api/v1/docs](http://localhost:8000/api/v1/docs)
-   - **GeoServer Admin**: [http://localhost:8080/geoserver](http://localhost:8080/geoserver) (Default: admin/geoserver)
+   - **GeoServer Admin**: [http://localhost:8080/geoserver](http://localhost:8080/geoserver) (Default: `admin` / `geoserver`)
+   - **Thing Management**: [http://localhost:8082/things](http://localhost:8082/things) (Default: `admin` / `admin` via Keycloak)
+   - **Frost API**: [http://localhost:8083/FROST-Server](http://localhost:8083/FROST-Server)
+   - **Grafana**: [http://localhost:3000/login](http://localhost:3000/login) (Default: `admin` / `admin`)
 
 ### Verification
 To verify that the entire stack is working correctly (Layers, Features, Data Linkage, and Time Series content), run the included verification script:
@@ -87,10 +175,6 @@ To verify that the entire stack is working correctly (Layers, Features, Data Lin
 ```bash
 # Using poetry (recommended)
 poetry run python scripts/verify_api.py
-
-# Or using pipenv/venv
-pip install requests
-python scripts/verify_api.py
 ```
 
 This script will check:
@@ -115,11 +199,12 @@ poetry shell
 The project includes a comprehensive test suite using `pytest`.
 
 ```bash
-# Run all tests
+# Run Unit Tests (Fast, Mocked) - Default
 poetry run pytest
 
-# Run with coverage report
-poetry run pytest --cov=app tests/
+# Run Integration Tests (Requires running stack)
+# Ensure docker-compose is up
+poetry run pytest tests/integration
 ```
 
 ### Code Structure
@@ -129,12 +214,15 @@ poetry run pytest --cov=app tests/
 
 ## API Usage Guide
 
-### 1. Geospatial Data
+### 1. Water Data (Stations)
+- **List Stations**: `GET /api/v1/water-data/stations` (Returns combined Geo + FROST data)
+
+### 2. Geospatial Data
 - **List Layers**: `GET /api/v1/geospatial/layers`
 - **Get Features (with BBOX)**: `GET /api/v1/geospatial/features?layer_name=czech_regions&bbox=12.0,48.5,18.9,51.1`
 - **Get Single Feature**: `GET /api/v1/geospatial/features/{feature_id}?layer_name=czech_regions`
 
-### 2. Time Series Data
+### 3. Time Series Data
 - **List Series**: `GET /api/v1/time-series/metadata`
 - **Get Data**: `GET /api/v1/time-series/data?series_id={from_metadata_or_feature}`
 
@@ -163,7 +251,10 @@ poetry run alembic upgrade head
 ## TODO:
 
 ### TimeIO
-- [ ] Use TimeIO to replace the custom time-series storage engine
+- [x] Use TimeIO to replace the custom time-series storage engine
+- [ ] Use Keycloak for authentication properly
+### Security
+- [ ] Fix security problems with project
 
 ## Contributing
 

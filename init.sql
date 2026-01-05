@@ -1,6 +1,9 @@
 -- Initialize Water Data Platform Database
 -- This script sets up the database with PostGIS extension and initial configuration
 
+-- Enable TimescaleDB extension (Must be first)
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+
 -- Enable PostGIS extension
 CREATE EXTENSION IF NOT EXISTS postgis;
 CREATE EXTENSION IF NOT EXISTS postgis_topology;

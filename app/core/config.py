@@ -19,6 +19,8 @@ class Settings(BaseSettings):
 
     # API
     api_prefix: str = Field(default="/api/v1", alias="API_PREFIX")
+    # WARNING: CORS_ORIGINS set to "*" is for development only.
+    # In production, specify exact allowed origins (e.g., "https://myapp.com").
     cors_origins: str = Field(default="*", alias="CORS_ORIGINS")
 
     # Database
@@ -34,10 +36,15 @@ class Settings(BaseSettings):
     geoserver_username: str = Field(alias="GEOSERVER_USERNAME")
     geoserver_password: str = Field(alias="GEOSERVER_PASSWORD")
     geoserver_workspace: str = Field(default="water_data", alias="GEOSERVER_WORKSPACE")
+    geoserver_timeout: int = Field(default=30, alias="GEOSERVER_TIMEOUT")
 
     # Time Data Processing
     time_zone: str = Field(default="UTC", alias="TIME_ZONE")
     max_time_range_days: int = Field(default=365, alias="MAX_TIME_RANGE_DAYS")
+    frost_url: str = Field(
+        default="http://frost:8080/FROST-Server/v1.1", alias="FROST_URL"
+    )
+    frost_timeout: int = Field(default=30, alias="FROST_TIMEOUT")
 
     # Security
     secret_key: str = Field(alias="SECRET_KEY")

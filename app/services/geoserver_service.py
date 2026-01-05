@@ -40,6 +40,7 @@ class GeoServerService:
         url = f"{self.rest_url}/{endpoint}"
         kwargs.setdefault("auth", self.auth)
         kwargs.setdefault("headers", {"Content-Type": "application/json"})
+        kwargs.setdefault("timeout", settings.geoserver_timeout)
 
         try:
             response = requests.request(method, url, **kwargs)
@@ -339,7 +340,12 @@ class GeoServerService:
                 "layers": f"{workspace}:{layer_name}",
             }
 
-            response = requests.get(self.wms_url, params=wms_params, auth=self.auth)
+            response = requests.get(
+                self.wms_url,
+                params=wms_params,
+                auth=self.auth,
+                timeout=settings.geoserver_timeout,
+            )
             response.raise_for_status()
 
             # Parse XML response

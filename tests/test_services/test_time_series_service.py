@@ -1,13 +1,31 @@
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.models.time_series import TimeSeriesData
 from app.schemas.time_series import (
     InterpolationRequest,
     TimeSeriesAggregation,
 )
 from app.services.time_series_service import TimeSeriesService
+
+
+class MockTimeSeriesData:
+    def __init__(
+        self,
+        series_id,
+        timestamp,
+        value,
+        quality_flag="good",
+        is_interpolated=False,
+        is_aggregated=False,
+    ):
+        self.series_id = series_id
+        self.timestamp = timestamp
+        self.value = value
+        self.quality_flag = quality_flag
+        self.is_interpolated = is_interpolated
+        self.is_aggregated = is_aggregated
 
 
 class TestTimeSeriesService:
@@ -21,13 +39,13 @@ class TestTimeSeriesService:
         data = []
         for i in range(10):
             data.append(
-                TimeSeriesData(
+                MockTimeSeriesData(
                     series_id="TS1",
                     timestamp=start + timedelta(hours=i),
                     value=float(i),
                     quality_flag="good",
-                    is_interpolated="false",
-                    is_aggregated="false",
+                    is_interpolated=False,
+                    is_aggregated=False,
                 )
             )
         return data
@@ -37,7 +55,7 @@ class TestTimeSeriesService:
             series_id="TS1",
             start_time=datetime(2023, 1, 1, 12, 0, tzinfo=timezone.utc),
             end_time=datetime(2023, 1, 1, 22, 0, tzinfo=timezone.utc),
-            aggregation_interval="1hour",
+            aggregation_interval="1h",
             aggregation_method="mean",
         )
 
@@ -69,7 +87,7 @@ class TestTimeSeriesService:
         for i in range(15):
             val = 100.0 if i == 3 else 10.0  # Anomaly at index 3
             data.append(
-                TimeSeriesData(
+                MockTimeSeriesData(
                     series_id="TS1", timestamp=start + timedelta(hours=i), value=val
                 )
             )
@@ -88,10 +106,10 @@ class TestTimeSeriesService:
     def test_interpolate_time_series(self, service, monkeypatch):
         start = datetime(2023, 1, 1, 10, 0, tzinfo=timezone.utc)
         data = [
-            TimeSeriesData(
+            MockTimeSeriesData(
                 series_id="TS1", timestamp=start, value=10.0, quality_flag="good"
             ),
-            TimeSeriesData(
+            MockTimeSeriesData(
                 series_id="TS1",
                 timestamp=start + timedelta(hours=2),
                 value=20.0,
@@ -103,7 +121,7 @@ class TestTimeSeriesService:
             series_id="TS1",
             start_time=start,
             end_time=start + timedelta(hours=2),
-            interval="1hour",
+            interval="1h",
             method="linear",
         )
 
@@ -114,3 +132,200 @@ class TestTimeSeriesService:
         interpolated = [p for p in result if p.is_interpolated]
         assert len(interpolated) == 1
         assert interpolated[0].value == 15.0
+
+    # --- FROST API Interaction Tests ---
+
+    def test_get_time_series_data_frost(self, service):
+        """Test fetching data from FROST API (mocked)."""
+        mock_response = {
+            "value": [
+                {
+                    "@iot.id": 1,
+                    "phenomenonTime": "2023-01-01T12:00:00Z",
+                    "result": 10.5,
+                },
+                {
+                    "@iot.id": 2,
+                    "phenomenonTime": "2023-01-02T12:00:00Z",
+                    "result": 11.0,
+                },
+            ]
+        }
+
+        with patch("app.services.time_series_service.requests.get") as mock_get:
+            mock_get.return_value.status_code = 200
+            mock_get.return_value.json.return_value = mock_response
+
+            from app.schemas.time_series import TimeSeriesQuery
+
+            query = TimeSeriesQuery(
+                series_id="DS_1",
+                start_time="2023-01-01T00:00:00Z",
+                end_time="2023-01-02T00:00:00Z",
+            )
+
+            data = service.get_time_series_data(query)
+
+            assert len(data) == 2
+            assert data[0].value == 10.5
+            assert data[0].timestamp == datetime(2023, 1, 1, 12, 0, tzinfo=timezone.utc)
+            mock_get.assert_called_once()
+
+    def test_get_stations(self, service):
+        """Test fetching stations from FROST (mocked)."""
+        mock_response = {
+            "value": [
+                {
+                    "@iot.id": 1,
+                    "name": "Test Station",
+                    "description": "A test station",
+                    "properties": {"station_id": "ST_1", "type": "river"},
+                    "Locations": [{"location": {"coordinates": [10.0, 50.0]}}],
+                }
+            ]
+        }
+
+        with patch("app.services.time_series_service.requests.get") as mock_get:
+            mock_get.return_value.status_code = 200
+            mock_get.return_value.json.return_value = mock_response
+
+            stations = service.get_stations()
+
+            assert len(stations) == 1
+            assert stations[0]["name"] == "Test Station"
+            assert stations[0]["latitude"] == 50.0
+            assert stations[0]["longitude"] == 10.0
+
+    def test_get_station(self, service):
+        """Test fetching a single station."""
+        mock_response = {
+            "value": [
+                {
+                    "@iot.id": 1,
+                    "name": "Test Station",
+                    "properties": {"station_id": "ST_1"},
+                }
+            ]
+        }
+        with patch("app.services.time_series_service.requests.get") as mock_get:
+            mock_get.return_value.status_code = 200
+            mock_get.return_value.json.return_value = mock_response
+
+            station = service.get_station("ST_1")
+            assert station is not None
+            assert station["station_id"] == "ST_1"
+
+    def test_create_station(self, service):
+        """Test creating a station (Thing + Location)."""
+        from app.schemas.water_data import WaterStationCreate
+
+        station_data = WaterStationCreate(
+            name="New Station",
+            station_id="ST_NEW",
+            latitude=50.0,
+            longitude=10.0,
+            station_type="river",
+            status="active",
+            organization="MyOrg",
+        )
+
+        # Mock requests
+        # 1. POST Thing -> 201 Created (Location header: ...Things(1))
+        # 2. POST Location -> 201 Created (Location header: ...Locations(1))
+        # 3. POST Link -> 201 Created
+
+        with patch("app.services.time_series_service.requests.post") as mock_post:
+            # Configure side effects for sequential calls: Thing, Location, Link
+            resp_thing = MagicMock()
+            resp_thing.status_code = 201
+            resp_thing.headers = {"Location": "http://frost/Things(100)"}
+
+            resp_loc = MagicMock()
+            resp_loc.status_code = 201
+            resp_loc.headers = {"Location": "http://frost/Locations(200)"}
+
+            resp_link = MagicMock()
+            resp_link.status_code = 201
+
+            mock_post.side_effect = [resp_thing, resp_loc, resp_link]
+
+            result = service.create_station(station_data)
+
+            assert result["name"] == "New Station"
+            assert mock_post.call_count >= 2  # Thing, Location, Link (maybe 3)
+
+    def test_get_time_series_metadata(self, service):
+        """Test fetching Datastream metadata."""
+        mock_response = {
+            "value": [
+                {
+                    "@iot.id": 10,
+                    "name": "DS_1",
+                    "description": "Water Level",
+                    "unitOfMeasurement": {"name": "Meter", "symbol": "m"},
+                    "Thing": {"name": "Test Station"},
+                    "ObservedProperty": {"name": "Water Level"},
+                    "phenomenonTime": "2023-01-01T00:00:00Z/2023-12-31T23:59:59Z",
+                }
+            ]
+        }
+
+        with patch("app.services.time_series_service.requests.get") as mock_get:
+            mock_get.return_value.status_code = 200
+            mock_get.return_value.json.return_value = mock_response
+
+            meta = service.get_time_series_metadata(parameter="Water Level")
+
+            assert len(meta) == 1
+            assert meta[0].series_id == "DS_1"
+            assert meta[0].unit == "Meter"
+            assert meta[0].start_time.year == 2023
+
+    def test_delete_station(self, service):
+        """Test deleting a station."""
+        # Mock GET response to find the station
+        mock_get_response = {
+            "value": [
+                {
+                    "@iot.id": 123,
+                    "name": "Test Station",
+                    "properties": {"station_id": "ST_DEL"},
+                }
+            ]
+        }
+
+        with patch("app.services.time_series_service.requests.get") as mock_get, patch(
+            "app.services.time_series_service.requests.delete"
+        ) as mock_delete:
+            # Setup GET
+            mock_get.return_value.status_code = 200
+            mock_get.return_value.json.return_value = mock_get_response
+
+            # Setup DELETE
+            mock_delete.return_value.status_code = 204
+
+            # Execute
+            result = service.delete_station("ST_DEL")
+
+            # Assert
+            assert result is True
+            mock_get.assert_called_once()
+            # Verify delete called with correct ID
+            args, _ = mock_delete.call_args
+            assert "Things(123)" in args[0]
+
+    def test_delete_station_not_found(self, service):
+        """Test deleting a non-existent station."""
+        # Mock GET response - empty
+        mock_get_response = {"value": []}
+
+        with patch("app.services.time_series_service.requests.get") as mock_get, patch(
+            "app.services.time_series_service.requests.delete"
+        ) as mock_delete:
+            mock_get.return_value.status_code = 200
+            mock_get.return_value.json.return_value = mock_get_response
+
+            result = service.delete_station("ST_MISSING")
+
+            assert result is False
+            mock_delete.assert_not_called()
