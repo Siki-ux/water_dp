@@ -30,7 +30,7 @@ water_dp/
 │   ├── api/                 # API endpoints (Geospatial, Time Series, Water Data)
 │   │   └── v1/
 │   │       └── endpoints/
-│   ├── core/               # Core functionality (Config, DB, Logging, Seeding)
+│   ├── core/               # Core functionality (Config, DB, Logging, Seeding, Security)
 │   ├── models/             # SQLAlchemy Database models
 │   ├── schemas/            # Pydantic validation schemas
 │   ├── services/           # Business logic
@@ -360,57 +360,8 @@ To support a highly customizable frontend (dashboards, maps, sub-portals) with p
     - **Distinction**: TimeIO manages the **Physical Inventory** (What sensors exist?). The Water DP backend must manage the **Application Context** (Which sensors belong to "Project X"?).
     - **Need**: `Project` or `App` entities in the database to link Users, Dashboards, and specific Sensors/Layers together.
 
-4.  **Security & Access Control (The "Secure" Part)**
-    - **Requirement**: The Python API **must** be protected by authentication middleware before being exposed beyond a trusted local environment. Public, unauthenticated access should be limited to explicitly designated health or info endpoints only.
-    - **Why**: User configurations and sensitive sensor data must be protected.
-    - **Implementation hint (FastAPI + Keycloak JWT)**:
 
-        ```python
-        from fastapi import Depends, FastAPI, HTTPException, status
-        from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-        from jose import JWTError, jwt
-
-        app = FastAPI()
-        security = HTTPBearer()
-
-        # These should be configured from environment / settings
-        KEYCLOAK_PUBLIC_KEY = "-----BEGIN PUBLIC KEY-----...-----END PUBLIC KEY-----"
-        KEYCLOAK_ISSUER = "https://keycloak.example.com/realms/your-realm"
-        KEYCLOAK_AUDIENCE = "your-api-client-id"
-
-        def get_current_user(
-            token: HTTPAuthorizationCredentials = Depends(security),
-        ) -> dict:
-            try:
-                payload = jwt.decode(
-                    token.credentials,
-                    KEYCLOAK_PUBLIC_KEY,
-                    algorithms=["RS256"],
-                    audience=KEYCLOAK_AUDIENCE,
-                    issuer=KEYCLOAK_ISSUER,
-                )
-            except JWTError:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid authentication credentials",
-                )
-            return payload
-
-        @app.get("/protected-endpoint")
-        def protected_endpoint(current_user: dict = Depends(get_current_user)):
-            # Example of using roles from Keycloak claims for RBAC:
-            roles = current_user.get("realm_access", {}).get("roles", [])
-            if "Admin" not in roles:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Insufficient permissions",
-                )
-            return {"message": "Secure data for admins only"}
-        ```
-
-    - **AuthN (Authentication)**: Validate Keycloak (or compatible) JWT Bearer tokens on every protected request using middleware/dependencies like `HTTPBearer` + JWT verification.
-    - **AuthZ (Authorization)**: Enforce role-based access control (RBAC) in route logic based on token claims (e.g., only `"Admin"` roles can create Projects).
-5.  **Bulk Data Import (The "Efficient Loading" Part)**
+4.  **Bulk Data Import (The "Efficient Loading" Part)**
     - **Missing**: No API endpoints or utilities for bulk importing large datasets.
     - **Why**: Initial setup, data migration, or historical data loading requires efficiently inserting thousands/millions of records.
     - **Need**:
@@ -424,7 +375,7 @@ To support a highly customizable frontend (dashboards, maps, sub-portals) with p
 - [ ] **Computation Infrastructure**: Set up a Worker Queue (Celery) and Redis for background tasks.
 - [ ] **Prediction Engine**: Create a `PredictionService` that consumes historical TimeIO data, runs a model, and writes "Forecast" data back to TimeIO (as a new Datastream).
 - [ ] **Logical Grouping**: Add `Project` / `Group` tables to organize Resources (Layers, Sensors) into "Apps".
-- [ ] **Security**: Implement FastAPI Middleware to validate Keycloak Tokens (Validation) and enforce scopes/roles.
+- [x] **Security**: Implement FastAPI Middleware to validate Keycloak Tokens (Validation) and enforce scopes/roles.
 - [ ] **Bulk Import**: Create endpoints and utilities for bulk data import (CSV, GeoJSON, Parquet) with background job processing.
 
 ### Implementation Plan
@@ -440,26 +391,18 @@ We need to decouple heavy computations from the main API.
     2.  API pushes a task to Redis Queue.
     3.  Worker picks up the task, fetches data from TimeIO, runs the model, and writes results back to TimeIO.
 
-#### 2. Security Layer (AuthN/AuthZ)
--   **Middleware**: Implement a FastAPI `HTTPBearer` dependency.
--   **Library**: `python-keycloak` or `python-jose` to validate JWT signatures from the Keycloak public key endpoint.
--   **Enforcement**:
-    ```python
-    @router.get("/secure-data", dependencies=[Depends(get_current_user)])
-    ```
-
-#### 3. Database Updates (User Context)
+#### 2. Database Updates (User Context)
 We will add new Tables to `app/models/` (via Alembic) to support "Apps" and "Dashboards".
 -   **`projects`**: `id`, `name`, `owner_id` (Keycloak User ID), `created_at`.
 -   **`dashboards`**: `id`, `project_id`, `layout_config` (JSONB - stores grid positions), `widgets` (JSONB).
 -   **`sensors_groups`**: Many-to-Many link between `Projects` and `Things` (TimeIO Stations).
 
-#### 4. Technology Stack Enhancements
+#### 3. Technology Stack Enhancements
 -   **Job Queue**: `celery` + `redis`
 -   **Machine Learning**: `scikit-learn` or `prophet` (inside the `worker` container).
 -   **JSON Storage**: SQLAlchemy `JSONB` type (for flexible dashboard layouts).
 
-#### 5. Bulk Data Import Tools  
+#### 4. Bulk Data Import Tools  
 We need efficient tools for loading large datasets without blocking the API.
 -   **API Endpoints**:
     - `POST /api/v1/bulk/import-geojson` - Upload GeoJSON files for PostGIS/GeoServer
@@ -480,7 +423,7 @@ We need efficient tools for loading large datasets without blocking the API.
 ### Fixes
 - [x] Use TimeIO to replace the custom time-series storage engine
 - [x] Use Keycloak for authentication properly
-- [/] Fix security problems with project
+- [x] Fix security problems with project
 
 ## Contributing
 
