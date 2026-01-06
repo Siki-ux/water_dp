@@ -22,7 +22,7 @@ from app.schemas.water_data import (
     WaterStationResponse,
     WaterStationUpdate,
 )
-from app.services.database_service import DatabaseService
+from app.services.time_series_service import TimeSeriesService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -32,8 +32,8 @@ router = APIRouter()
 async def create_station(station: WaterStationCreate, db: Session = Depends(get_db)):
     """Create a new water station."""
     try:
-        db_service = DatabaseService(db)
-        return db_service.create_station(station)
+        service = TimeSeriesService(db)
+        return service.create_station(station)
     except Exception as e:
         logger.error(f"Failed to create station: {e}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -50,8 +50,8 @@ async def get_stations(
 ):
     """Get water stations with optional filtering."""
     try:
-        db_service = DatabaseService(db)
-        stations = db_service.get_stations(
+        service = TimeSeriesService(db)
+        stations = service.get_stations(
             skip=skip, limit=limit, station_type=station_type, status=status
         )
 
@@ -71,8 +71,8 @@ async def get_stations(
 async def get_station(station_id: str, db: Session = Depends(get_db)):
     """Get a specific water station."""
     try:
-        db_service = DatabaseService(db)
-        station = db_service.get_station(station_id)
+        service = TimeSeriesService(db)
+        station = service.get_station(station_id)
         if not station:
             raise HTTPException(status_code=404, detail="Station not found")
         return station
@@ -89,11 +89,11 @@ async def update_station(
 ):
     """Update a water station."""
     try:
-        db_service = DatabaseService(db)
+        service = TimeSeriesService(db)
 
         update_data = station_update.model_dump(exclude_unset=True)
 
-        station = db_service.update_station(station_id, update_data)
+        station = service.update_station(station_id, update_data)
         if not station:
             raise HTTPException(status_code=404, detail="Station not found")
         return station
@@ -108,15 +108,10 @@ async def update_station(
 async def delete_station(station_id: str, db: Session = Depends(get_db)):
     """Delete a water station."""
     try:
-        db_service = DatabaseService(db)
-        station = db_service.get_station(station_id)
-        if not station:
+        service = TimeSeriesService(db)
+        success = service.delete_station(station_id)
+        if not success:
             raise HTTPException(status_code=404, detail="Station not found")
-
-        # In a real implementation, you'd want to handle cascading deletes
-        # and soft deletes rather than hard deletes
-        db.delete(station)
-        db.commit()
 
         return {"message": "Station deleted successfully"}
     except HTTPException:
@@ -132,8 +127,8 @@ async def create_data_point(
 ):
     """Create a new water data point."""
     try:
-        db_service = DatabaseService(db)
-        return db_service.create_data_point(data_point)
+        service = TimeSeriesService(db)
+        return service.create_data_point(data_point)
     except Exception as e:
         logger.error(f"Failed to create data point: {e}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -147,11 +142,11 @@ async def create_bulk_data_points(
 ):
     """Create multiple water data points."""
     try:
-        db_service = DatabaseService(db)
+        service = TimeSeriesService(db)
         created_points = []
 
         for data_point in bulk_data.data_points:
-            point = db_service.create_data_point(data_point)
+            point = service.create_data_point(data_point)
             created_points.append(point)
 
         return created_points
@@ -174,27 +169,52 @@ async def get_data_points(
     try:
         from datetime import datetime
 
-        db_service = DatabaseService(db)
+        from app.schemas.time_series import TimeSeriesQuery
+
+        service = TimeSeriesService(db)
 
         start_dt = datetime.fromisoformat(start_time) if start_time else None
         end_dt = datetime.fromisoformat(end_time) if end_time else None
 
-        data_points = db_service.get_data_points(
-            station_id=station_id,
-            start_time=start_dt,
-            end_time=end_dt,
-            parameter=parameter,
-            limit=limit,
-        )
+        # 1. Fetch Datastreams for this station/parameter to get metadata (unit, etc.)
+        datastreams_result = service.get_datastreams_for_station(station_id, parameter)
+
+        mapped_points = []
+        for ds in datastreams_result:
+            ds_name = ds.get("name")
+            op_name = ds.get("ObservedProperty", {}).get("name", "unknown")
+            uom = ds.get("unitOfMeasurement", {}).get("name", "unknown")
+
+            # 2. Fetch Observations for this datastream
+            query = TimeSeriesQuery(
+                series_id=ds_name, start_time=start_dt, end_time=end_dt, limit=limit
+            )
+            data_points = service.get_time_series_data(query)
+
+            # 3. Map to Response using metadata
+            for dp in data_points:
+                mapped_points.append(
+                    {
+                        "id": dp.id,
+                        "station_id": station_id,
+                        "timestamp": dp.timestamp,
+                        "parameter": op_name,
+                        "value": dp.value,
+                        "unit": uom,
+                        "quality_flag": getattr(dp, "quality_flag", "good"),
+                        "created_at": getattr(dp, "created_at", datetime.now()),
+                        "updated_at": getattr(dp, "updated_at", datetime.now()),
+                    }
+                )
 
         if quality_filter:
-            data_points = [
-                dp for dp in data_points if dp.quality_flag == quality_filter
+            mapped_points = [
+                dp for dp in mapped_points if dp["quality_flag"] == quality_filter
             ]
 
         return DataPointListResponse(
-            data_points=data_points,
-            total=len(data_points),
+            data_points=mapped_points,
+            total=len(mapped_points),
             station_id=station_id,
             parameter=parameter,
             time_range=(
@@ -216,8 +236,8 @@ async def get_latest_data_points(
 ):
     """Get latest data points for a station."""
     try:
-        db_service = DatabaseService(db)
-        data_points = db_service.get_latest_data(station_id, parameter)
+        service = TimeSeriesService(db)
+        data_points = service.get_latest_data(station_id, parameter)
         return data_points
     except Exception as e:
         logger.error(f"Failed to get latest data points: {e}")
@@ -235,12 +255,12 @@ async def get_station_statistics(
     try:
         from datetime import datetime
 
-        db_service = DatabaseService(db)
+        service = TimeSeriesService(db)
 
         start_dt = datetime.fromisoformat(start_time) if start_time else None
         end_dt = datetime.fromisoformat(end_time) if end_time else None
 
-        stats = db_service.get_station_statistics(
+        stats = service.get_station_statistics(
             station_id=station_id, start_time=start_dt, end_time=end_dt
         )
 
@@ -258,8 +278,7 @@ async def create_quality_data(
 ):
     """Create water quality data."""
     try:
-        # Note: You'll need to implement create_quality_data in DatabaseService
-        # For now, this is a placeholder
+        # Placeholder
         raise HTTPException(
             status_code=501, detail="Quality data creation not yet implemented"
         )
@@ -278,9 +297,7 @@ async def get_quality_data(
 ):
     """Get water quality data."""
     try:
-
-        # Note: You'll need to implement get_quality_data in DatabaseService
-        # For now, this is a placeholder
+        # Placeholder
         raise HTTPException(
             status_code=501, detail="Quality data retrieval not yet implemented"
         )

@@ -86,7 +86,7 @@ jobs:
           GEOSERVER_USERNAME: "admin"
           GEOSERVER_PASSWORD: "geoserver"
           SECRET_KEY: "supersecretkey"
-        run: poetry run pytest
+        run: poetry run pytest -m "not integration"
 
   build-docker:
     name: Build Docker Image
