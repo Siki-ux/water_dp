@@ -95,7 +95,7 @@ def test_time_series(station_id):
 
     print(f"\nTesting Time Series for station {station_id}...")
     # The seeding logic creates series_id = f"TS_{station_id}_LEVEL"
-    series_id = f"TS_{station_id}_LEVEL"
+    series_id = f"DS_{station_id}_LEVEL"
 
     try:
         r = requests.get(f"{BASE_URL}/time-series/data?series_id={series_id}&limit=5")

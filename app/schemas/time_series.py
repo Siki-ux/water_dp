@@ -40,6 +40,7 @@ class AggregationMethod(str, Enum):
     """Aggregation methods."""
 
     MEAN = "mean"
+    AVG = "avg"  # Alias for mean
     MAX = "max"
     MIN = "min"
     SUM = "sum"
@@ -56,13 +57,13 @@ class AggregationInterval(str, Enum):
     MINUTE_5 = "5min"
     MINUTE_15 = "15min"
     MINUTE_30 = "30min"
-    HOUR_1 = "1hour"
-    HOUR_6 = "6hour"
-    HOUR_12 = "12hour"
-    DAY_1 = "1day"
-    WEEK_1 = "1week"
-    MONTH_1 = "1month"
-    YEAR_1 = "1year"
+    HOUR_1 = "1h"
+    HOUR_6 = "6h"
+    HOUR_12 = "12h"
+    DAY_1 = "1D"
+    WEEK_1 = "1W"
+    MONTH_1 = "1M"
+    YEAR_1 = "1Y"
 
 
 class TimeSeriesMetadataBase(BaseModel):
@@ -248,7 +249,20 @@ class AggregatedDataPoint(BaseModel):
     aggregation_method: str
     aggregation_interval: str
     quality_flags: List[str]
+    min: Optional[float] = None
+    max: Optional[float] = None
+    avg: Optional[float] = None
     metadata: Optional[Dict[str, Any]] = None
+
+
+class InterpolatedDataPoint(BaseModel):
+    """Interpolated data point."""
+
+    timestamp: datetime
+    value: float
+    is_interpolated: bool
+    quality_flag: str
+    properties: Optional[Dict[str, Any]] = None
 
 
 class AggregatedTimeSeriesResponse(BaseModel):
@@ -282,7 +296,9 @@ class InterpolationRequest(BaseModel):
     start_time: datetime
     end_time: datetime
     method: str = Field(default="linear", description="Interpolation method")
-    interval: str = Field(default="1hour", description="Output interval")
+    interval: AggregationInterval = Field(
+        default=AggregationInterval.HOUR_1, description="Output interval"
+    )
     fill_gaps: bool = Field(default=True, description="Fill gaps in data")
     max_gap_duration: Optional[str] = Field(
         None, description="Maximum gap duration to fill"
@@ -293,7 +309,7 @@ class InterpolationResponse(BaseModel):
     """Response for interpolation."""
 
     series_id: str
-    interpolated_data: List[TimeSeriesDataResponse]
+    interpolated_data: List[InterpolatedDataPoint]
     method: str
     interval: str
     gaps_filled: int

@@ -24,7 +24,6 @@ from app.schemas.time_series import (
     TimeSeriesQuery,
     TimeSeriesStatistics,
 )
-from app.services.database_service import DatabaseService
 from app.services.time_series_service import TimeSeriesService
 
 logger = logging.getLogger(__name__)
@@ -36,12 +35,10 @@ async def create_time_series_metadata(
     metadata: TimeSeriesMetadataCreate, db: Session = Depends(get_db)
 ):
     """Create time series metadata."""
-    try:
-        db_service = DatabaseService(db)
-        return db_service.create_time_series_metadata(metadata)
-    except Exception as e:
-        logger.error(f"Failed to create time series metadata: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+    raise HTTPException(
+        status_code=501,
+        detail="Manual metadata creation not supported in TimeIO mode. Use Frost API.",
+    )
 
 
 @router.get("/metadata", response_model=TimeSeriesMetadataListResponse)
@@ -55,8 +52,8 @@ async def get_time_series_metadata(
 ):
     """Get time series metadata with filtering."""
     try:
-        db_service = DatabaseService(db)
-        metadata_list = db_service.get_time_series_metadata(
+        service = TimeSeriesService(db)
+        metadata_list = service.get_time_series_metadata(
             skip=skip,
             limit=limit,
             parameter=parameter,
@@ -79,8 +76,8 @@ async def get_time_series_metadata(
 async def get_time_series_metadata_by_id(series_id: str, db: Session = Depends(get_db)):
     """Get specific time series metadata."""
     try:
-        db_service = DatabaseService(db)
-        metadata = db_service.get_time_series_metadata_by_id(series_id)
+        service = TimeSeriesService(db)
+        metadata = service.get_time_series_metadata_by_id(series_id)
         if not metadata:
             raise HTTPException(
                 status_code=404, detail=f"Time series {series_id} not found"
@@ -100,14 +97,9 @@ async def update_time_series_metadata(
     db: Session = Depends(get_db),
 ):
     """Update time series metadata."""
-    try:
-        # Note: You'll need to implement update_time_series_metadata in DatabaseService
-        raise HTTPException(
-            status_code=501, detail="Time series metadata update not yet implemented"
-        )
-    except Exception as e:
-        logger.error(f"Failed to update time series metadata {series_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    raise HTTPException(
+        status_code=501, detail="Metadata update not supported via this API."
+    )
 
 
 @router.post("/data", response_model=TimeSeriesDataResponse, status_code=201)
@@ -115,14 +107,7 @@ async def create_time_series_data(
     data_point: TimeSeriesDataCreate, db: Session = Depends(get_db)
 ):
     """Create a single time series data point."""
-    try:
-        # Note: You'll need to implement create_time_series_data in DatabaseService
-        raise HTTPException(
-            status_code=501, detail="Time series data creation not yet implemented"
-        )
-    except Exception as e:
-        logger.error(f"Failed to create time series data: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+    raise HTTPException(status_code=501, detail="Use Frost API for data ingestion.")
 
 
 @router.post("/data/bulk", response_model=List[TimeSeriesDataResponse], status_code=201)
@@ -130,12 +115,9 @@ async def create_bulk_time_series_data(
     bulk_data: BulkTimeSeriesDataCreate, db: Session = Depends(get_db)
 ):
     """Create multiple time series data points."""
-    try:
-        db_service = DatabaseService(db)
-        return db_service.add_time_series_data(bulk_data.data_points)
-    except Exception as e:
-        logger.error(f"Failed to create bulk time series data: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+    raise HTTPException(
+        status_code=501, detail="Use Frost API for bulk data ingestion."
+    )
 
 
 @router.get("/data", response_model=TimeSeriesListResponse)

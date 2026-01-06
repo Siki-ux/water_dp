@@ -55,7 +55,9 @@ def init_db() -> None:
     Handles existing objects gracefully.
     """
     try:
-        # Import models to ensure they are registered with Base.metadata
+        # Import all models explicitly to ensure they are registered with Base.metadata
+        # This is required for SQLAlchemy's declarative base to discover and create tables
+        from app.models import GeoFeature, GeoLayer  # noqa: F401
 
         # Use checkfirst=True to avoid errors if tables already exist
         logger.info(
