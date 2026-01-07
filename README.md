@@ -341,12 +341,9 @@ poetry run alembic upgrade head
 To support a highly customizable frontend (dashboards, maps, sub-portals) with predictive capabilities, the current backend requires the following architectural additions:
 
 ### Gap Analysis
-1.  **User Configuration Persistence (The "Customizable" Part)**
-    - **Missing**: No database tables or API endpoints exist to store user-created layouts.
-    - **Why**: If a user creates a "dashboard" with specific graphs and map layers, this configuration must be saved on the backend so it persists across sessions and devices.
-    - **Need**: New models (`Dashboard`, `Widget`, `MapConfig`) and generic JSON-storage endpoints.
 
-2.  **Computation & Prediction Engine (The "Complex Computation" Part)**
+
+1.  **Computation & Prediction Engine (The "Complex Computation" Part)**
     - **Missing**: Current analytics are limited to fast SQL aggregations (min/max/avg). There is no infrastructure for running heavy prediction models (AI/ML) or long-running simulations.
     - **Why**: "Predictions on how water will behave" requires complex mathematics that cannot run inside a standard HTTP request.
     - **Need**:
@@ -354,14 +351,7 @@ To support a highly customizable frontend (dashboards, maps, sub-portals) with p
         - **Scheduler** for running regular predictions (e.g., "every night at 00:00").
         - **Prediction Service** to interface with ML libraries (scikit-learn, etc.).
 
-3.  **Logical Grouping & Metadata**
-    - **Missing**: Sensors are currently just a flat list.
-    - **Why**: "Sub-portals" and "Apps" need to group sensors logically (e.g., "Project A Sensors", "Region B Flood Watch").
-    - **Distinction**: TimeIO manages the **Physical Inventory** (What sensors exist?). The Water DP backend must manage the **Application Context** (Which sensors belong to "Project X"?).
-    - **Need**: `Project` or `App` entities in the database to link Users, Dashboards, and specific Sensors/Layers together.
-
-
-4.  **Bulk Data Import (The "Efficient Loading" Part)**
+2.  **Bulk Data Import (The "Efficient Loading" Part)**
     - **Missing**: No API endpoints or utilities for bulk importing large datasets.
     - **Why**: Initial setup, data migration, or historical data loading requires efficiently inserting thousands/millions of records.
     - **Need**:
@@ -371,10 +361,10 @@ To support a highly customizable frontend (dashboards, maps, sub-portals) with p
         - **Background Processing**: Use job queue for large imports to avoid timeout.
 
 ### TODO
-- [ ] **User Config Store**: Design DB schema and API for `UserDashboards` and `WidgetConfigs` (JSONB).
+- [x] **User Config Store**: Design DB schema and API for `UserDashboards` and `WidgetConfigs` (JSONB).
 - [ ] **Computation Infrastructure**: Set up a Worker Queue (Celery) and Redis for background tasks.
 - [ ] **Prediction Engine**: Create a `PredictionService` that consumes historical TimeIO data, runs a model, and writes "Forecast" data back to TimeIO (as a new Datastream).
-- [ ] **Logical Grouping**: Add `Project` / `Group` tables to organize Resources (Layers, Sensors) into "Apps".
+- [x] **Logical Grouping**: Add `Project` / `Group` tables to organize Resources (Layers, Sensors) into "Apps".
 - [x] **Security**: Implement FastAPI Middleware to validate Keycloak Tokens (Validation) and enforce scopes/roles.
 - [ ] **Bulk Import**: Create endpoints and utilities for bulk data import (CSV, GeoJSON, Parquet) with background job processing.
 
@@ -391,18 +381,14 @@ We need to decouple heavy computations from the main API.
     2.  API pushes a task to Redis Queue.
     3.  Worker picks up the task, fetches data from TimeIO, runs the model, and writes results back to TimeIO.
 
-#### 2. Database Updates (User Context)
-We will add new Tables to `app/models/` (via Alembic) to support "Apps" and "Dashboards".
--   **`projects`**: `id`, `name`, `owner_id` (Keycloak User ID), `created_at`.
--   **`dashboards`**: `id`, `project_id`, `layout_config` (JSONB - stores grid positions), `widgets` (JSONB).
--   **`sensors_groups`**: Many-to-Many link between `Projects` and `Things` (TimeIO Stations).
 
-#### 3. Technology Stack Enhancements
+
+#### 2. Technology Stack Enhancements
 -   **Job Queue**: `celery` + `redis`
 -   **Machine Learning**: `scikit-learn` or `prophet` (inside the `worker` container).
 -   **JSON Storage**: SQLAlchemy `JSONB` type (for flexible dashboard layouts).
 
-#### 4. Bulk Data Import Tools  
+#### 3. Bulk Data Import Tools  
 We need efficient tools for loading large datasets without blocking the API.
 -   **API Endpoints**:
     - `POST /api/v1/bulk/import-geojson` - Upload GeoJSON files for PostGIS/GeoServer
