@@ -1,7 +1,7 @@
 from typing import Any, List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api import deps
@@ -158,5 +158,10 @@ def create_project_dashboard(
 ) -> Any:
     """Create a dashboard in the project."""
     # Ensure project_id matches if passed in body
+    if dashboard_in.project_id and dashboard_in.project_id != project_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Project ID in body does not match URL parameter",
+        )
     dashboard_in = dashboard_in.model_copy(update={"project_id": project_id})
     return DashboardService.create_dashboard(db, dashboard_in, current_user)
