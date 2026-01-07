@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.geospatial import GeoFeature, GeoLayer
+from app.models.user_context import Dashboard, Project, project_sensors
 
 logger = logging.getLogger(__name__)
 
@@ -492,6 +493,66 @@ def seed_data(db: Session) -> None:
 
         except Exception as e:
             logger.error(f"GeoServer publication failed: {e}")
+
+        # -------------------------------------------------------------------------
+        # PART 3: Seed User Context (Projects, Dashboards)
+        # -------------------------------------------------------------------------
+        DEMO_USER_ID = "f5655555-5555-5555-5555-555555555555"  # Demo User ID
+
+        # Check if project exists
+        project = db.query(Project).filter(Project.name == "Demo Project").first()
+        if not project:
+            logger.info("Seeding Demo Project...")
+            project = Project(
+                name="Demo Project",
+                description="A sample project showing water levels.",
+                owner_id=DEMO_USER_ID,
+            )
+            db.add(project)
+            db.commit()
+            db.refresh(project)
+
+            # Add Sensors to Project
+            # Get some thing IDs from features
+            features_with_ids = (
+                db.query(GeoFeature)
+                .filter(GeoFeature.layer_id == "czech_regions")
+                .limit(3)
+                .all()
+            )
+            for f in features_with_ids:
+                props = f.properties
+                if props and "station_id" in props:
+                    sensor_id = props["station_id"]
+                    try:
+                        sql = project_sensors.insert().values(
+                            project_id=project.id, sensor_id=str(sensor_id)
+                        )
+                        db.execute(sql)
+                        logger.info(f"Linked sensor {sensor_id} to project.")
+                    except Exception as e:
+                        logger.warning(f"Failed to link sensor: {e}")
+            db.commit()
+
+            # Create Dashboard
+            logger.info("Seeding Demo Dashboard...")
+            dashboard = Dashboard(
+                project_id=project.id,
+                name="Water Levels Overview",
+                is_public=True,
+                layout_config={"layout": "grid"},
+                widgets=[
+                    {
+                        "type": "chart",
+                        "title": "Main River Level",
+                        "sensor_id": "STATION_1",
+                    },
+                    {"type": "map", "title": "Region Map"},
+                ],
+            )
+            db.add(dashboard)
+            db.commit()
+            logger.info("Demo Project and Dashboard seeded.")
 
     except Exception as e:
         logger.error(f"Database seeding failed: {e}")
