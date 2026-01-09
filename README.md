@@ -37,6 +37,10 @@ water_dp/
 │   │   ├── database_service.py    # CRUD for all entities
 │   │   ├── geoserver_service.py   # GeoServer interaction
 │   │   └── time_series_service.py # TimeIO integration
+│   ├── tasks/              # Celery background tasks
+│   │   ├── import_tasks.py        # Bulk import tasks
+│   │   └── computation_tasks.py   # Computation execution tasks
+│   ├── computations/       # Python scripts for heavy computation
 │   └── main.py            # FastAPI application entry point
 ├── tests/                 # Unit and integration tests
 │   ├── test_services/     # Service layer tests
@@ -81,6 +85,61 @@ water_dp/
     - **Role**: Interactive dashboards for time-series data
     - **Integration**: Connects directly to TimescaleDB to visualize seeded `OBSERVATIONS`
 
+### 5. Database Schema
+
+The database relies on three main groups of tables: **Geospatial (GIS)**, **User Context (Projects)**, and **Computations**.
+
+```mermaid
+erDiagram
+    %% User Context
+    PROJECTS {
+        uuid id PK
+        string name
+        string owner_id "Keycloak User ID"
+    }
+    
+    DASHBOARDS {
+        uuid id PK
+        uuid project_id FK
+        string name
+        json layout_config
+    }
+    
+    COMPUTATION_SCRIPTS {
+        uuid id PK
+        uuid project_id FK
+        string name
+        string filename
+        string uploaded_by
+    }
+
+    PROJECT_SENSORS {
+        uuid project_id PK, FK
+        string sensor_id PK "TimeIO Thing ID"
+    }
+
+    %% Geospatial
+    GEO_LAYERS {
+        string layer_name PK
+        string layer_type
+        string workspace
+    }
+
+    GEO_FEATURES {
+        string feature_id PK
+        string layer_id FK
+        geometry geometry
+        jsonb properties
+    }
+
+    %% Relationships
+    PROJECTS ||--o{ DASHBOARDS : contains
+    PROJECTS ||--o{ COMPUTATION_SCRIPTS : owns
+    PROJECTS ||--o{ PROJECT_SENSORS : links_to
+    
+    GEO_LAYERS ||--o{ GEO_FEATURES : contains
+```
+
 ### System Architecture Diagram
 
 ```mermaid
@@ -92,6 +151,7 @@ graph TB
     
     subgraph "Application Layer"
         API[FastAPI Backend<br/>Water DP]
+        Worker[Celery Worker<br/>Async Tasks]
         GeoServer[GeoServer<br/>WMS/WFS]
         Grafana[Grafana<br/>Dashboards]
         ThingMgmt[Thing Management<br/>UI]
@@ -105,7 +165,7 @@ graph TB
     
     subgraph "Data Layer"
         DB[(PostgreSQL<br/>+ PostGIS<br/>+ TimescaleDB)]
-        Redis[(Redis<br/>Cache)]
+        Redis[(Redis<br/>Cache & Queue)]
         MinIO[(MinIO<br/>Object Storage)]
     end
     
@@ -123,7 +183,10 @@ graph TB
     
     %% Application layer connections
     API -->|Read/Write| DB
-    API -->|Cache| Redis
+    API -->|Cache/Queue| Redis
+    Worker -->|Consume Tasks| Redis
+    Worker -->|Read/Write| DB
+    Worker -->|Run Scripts| Computations[Computation Scripts]
     GeoServer -->|Read Geo Data<br/>PostGIS| DB
     Grafana -->|Read Time Series<br/>TimescaleDB| DB
     ThingMgmt -->|Manage Things| Frost
@@ -362,18 +425,18 @@ To support a highly customizable frontend (dashboards, maps, sub-portals) with p
 
 ### TODO
 - [x] **User Config Store**: Design DB schema and API for `UserDashboards` and `WidgetConfigs` (JSONB).
-- [ ] **Computation Infrastructure**: Set up a Worker Queue (Celery) and Redis for background tasks.
-- [ ] **Prediction Engine**: Create a `PredictionService` that consumes historical TimeIO data, runs a model, and writes "Forecast" data back to TimeIO (as a new Datastream).
+- [x] **Computation Infrastructure**: Set up a Worker Queue (Celery) and Redis for background tasks.
+- [x] **Prediction Engine**: Implemented `ComputationScript` engine to run Python scripts (e.g., simulations/predictions) on Worker nodes.
 - [x] **Logical Grouping**: Add `Project` / `Group` tables to organize Resources (Layers, Sensors) into "Apps".
 - [x] **Security**: Implement FastAPI Middleware to validate Keycloak Tokens (Validation) and enforce scopes/roles.
-- [ ] **Bulk Import**: Create endpoints and utilities for bulk data import (CSV, GeoJSON, Parquet) with background job processing.
+- [x] **Bulk Import**: Create endpoints and utilities for bulk data import (CSV, GeoJSON, Parquet) with background job processing.
 
 ### Implementation Plan
 To achieve the above goals, we will implement the following:
 
-#### 1. Architecture: The "Worker" Service
-We need to decouple heavy computations from the main API.
--   **Add a new container**: `worker` in `docker-compose.yml`.
+#### 1. Architecture: The "Worker" Service (Implemented)
+We decoupled heavy computations from the main API.
+-   **Added container**: `worker` in `docker-compose.yml`.
 -   **Technology**: [Celery](https://docs.celeryq.dev/) (Distributed Task Queue).
 -   **Broker**: [Redis](https://redis.io/) (Already present in stack).
 -   **Workflow**:
@@ -388,23 +451,21 @@ We need to decouple heavy computations from the main API.
 -   **Machine Learning**: `scikit-learn` or `prophet` (inside the `worker` container).
 -   **JSON Storage**: SQLAlchemy `JSONB` type (for flexible dashboard layouts).
 
-#### 3. Bulk Data Import Tools  
-We need efficient tools for loading large datasets without blocking the API.
+#### 3. Bulk Data Import Tools (Implemented)
+We created efficient tools for loading large datasets without blocking the API.
 -   **API Endpoints**:
-    - `POST /api/v1/bulk/import-geojson` - Upload GeoJSON files for PostGIS/GeoServer
-    - `POST /api/v1/bulk/import-timeseries` - Upload CSV with sensor data to TimescaleDB
-    - `POST /api/v1/bulk/import-parquet` - Upload Parquet files (efficient for large time-series)
+    - `POST /api/v1/bulk/import/geojson` - Upload GeoJSON files for PostGIS/GeoServer
+    - `POST /api/v1/bulk/import/timeseries` - Upload CSV with sensor data to TimescaleDB
+    - `POST /api/v1/computations/run/{script}` - Trigger background scripts.
 -   **Technologies**:
     - `pandas` (already present) for CSV/Parquet parsing
     - `geopandas` for GeoJSON processing and validation
-    - PostgreSQL `COPY` command for fast bulk inserts (10-100x faster than row-by-row)
     - Celery for background processing (large files)
 -   **Workflow**:
     1. Upload file via API (file validation and size check)
     2. Push job to Celery queue (returns job ID immediately)
     3. Worker processes file in background
-    4. Use database bulk insert (not row-by-row)
-    5. Client polls `/api/v1/jobs/{job_id}` for progress/completion
+    4. Client polls `/api/v1/bulk/tasks/{job_id}` for progress/completion
 
 ### Fixes
 - [x] Use TimeIO to replace the custom time-series storage engine

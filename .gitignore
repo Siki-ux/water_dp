@@ -36,3 +36,6 @@ junit/
 # OS
 .DS_Store
 Thumbs.db
+
+# Seeded Computation Scripts
+app/computations/*_flood_prediction.py

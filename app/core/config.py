@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     sentry_dsn: Optional[str] = Field(default=None, alias="SENTRY_DSN")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
+    # Celery
+    celery_broker_url: str = Field(
+        default="redis://localhost:6379/0", alias="CELERY_BROKER_URL"
+    )
+    celery_result_backend: str = Field(
+        default="redis://localhost:6379/0", alias="CELERY_RESULT_BACKEND"
+    )
+
     model_config = {"env_file": ".env", "case_sensitive": False}
 
     @property

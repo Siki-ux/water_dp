@@ -552,7 +552,77 @@ def seed_data(db: Session) -> None:
             )
             db.add(dashboard)
             db.commit()
-            logger.info("Demo Project and Dashboard seeded.")
+        # Seed Computation Script (Run regardless of project creation status, just needs project to exist)
+        if project:
+            logger.info("Seeding Computation Script...")
+            import shutil
+            import uuid
+
+            from app.models.computations import ComputationScript
+
+            script_name = "Flood Prediction"
+            script_filename = "flood_prediction.py"
+
+            # Check if exists
+            existing_script = (
+                db.query(ComputationScript)
+                .filter(
+                    ComputationScript.project_id == project.id,
+                    ComputationScript.name == script_name,
+                )
+                .first()
+            )
+
+            if not existing_script:
+                # Source path (assuming it exists in app/computations/flood_prediction.py as a template)
+                source_path = os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)),
+                    "computations",
+                    script_filename,
+                )
+
+                if os.path.exists(source_path):
+                    # Generate secure filename
+                    project_hex = (
+                        project.id.hex
+                        if hasattr(project.id, "hex")
+                        else str(project.id).replace("-", "")
+                    )
+                    secure_filename = (
+                        f"{project_hex}_{uuid.uuid4().hex[:8]}_{script_filename}"
+                    )
+                    dest_path = os.path.join(
+                        os.path.dirname(os.path.dirname(__file__)),
+                        "computations",
+                        secure_filename,
+                    )
+
+                    try:
+                        shutil.copy(source_path, dest_path)
+
+                        comp_script = ComputationScript(
+                            name=script_name,
+                            description="Prediction model for flood risk assessment.",
+                            filename=secure_filename,
+                            project_id=project.id,
+                            uploaded_by=DEMO_USER_ID,
+                            metadata_json=json.dumps(
+                                {"version": "1.0", "type": "demonstration"}
+                            ),
+                        )
+                        db.add(comp_script)
+                        db.commit()
+                        logger.info(f"Seeded computation script: {script_name}")
+                    except Exception as e:
+                        logger.error(f"Failed to copy/seed script file: {e}")
+                else:
+                    logger.warning(
+                        f"Source script {source_path} not found for seeding."
+                    )
+            else:
+                logger.info("Computation script already exists/checked.")
+
+        logger.info("Demo Project and Dashboard seeded/checked.")
 
     except Exception as e:
         logger.error(f"Seeding failed: {e}")

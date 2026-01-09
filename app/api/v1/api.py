@@ -6,6 +6,8 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     auth,
+    bulk,
+    computations,
     dashboards,
     geospatial,
     projects,
@@ -26,3 +28,7 @@ api_router.include_router(
 api_router.include_router(geospatial.router, prefix="/geospatial", tags=["geospatial"])
 api_router.include_router(projects.router, prefix="/projects", tags=["projects"])
 api_router.include_router(dashboards.router, prefix="/dashboards", tags=["dashboards"])
+api_router.include_router(bulk.router, prefix="/bulk", tags=["bulk"])
+api_router.include_router(
+    computations.router, prefix="/computations", tags=["computations"]
+)

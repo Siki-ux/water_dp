@@ -21,7 +21,7 @@ MOCK_ADMIN = {"sub": "admin-123", "realm_access": {"roles": ["admin"]}}
 def normal_user_token():
     app.dependency_overrides[deps.get_current_user] = lambda: MOCK_USER
     yield
-    app.dependency_overrides = {}
+    app.dependency_overrides.pop(deps.get_current_user, None)
 
 
 @pytest.fixture

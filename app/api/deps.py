@@ -53,3 +53,19 @@ def has_role(required_role: str) -> Callable:
         return current_user
 
     return role_checker
+
+
+async def get_current_active_superuser(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Check if the user is a superuser (admin).
+    """
+    realm_access = current_user.get("realm_access", {})
+    roles = realm_access.get("roles", [])
+    if "admin" not in roles and "admin-siki" not in roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The user doesn't have enough privileges",
+        )
+    return current_user
