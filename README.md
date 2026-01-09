@@ -30,8 +30,12 @@ water_dp/
 │   ├── api/                 # API endpoints (Geospatial, Time Series, Water Data)
 │   │   └── v1/
 │   │       └── endpoints/
+│   │           ├── bulk.py          # Bulk import endpoints
+│   │           └── computations.py   # Computation execution endpoints
 │   ├── core/               # Core functionality (Config, DB, Logging, Seeding, Security)
+│   │   └── celery_app.py   # Celery application configuration
 │   ├── models/             # SQLAlchemy Database models
+│   │   └── computations.py # ComputationScript & ComputationJob models
 │   ├── schemas/            # Pydantic validation schemas
 │   ├── services/           # Business logic
 │   │   ├── database_service.py    # CRUD for all entities
@@ -45,6 +49,8 @@ water_dp/
 ├── tests/                 # Unit and integration tests
 │   ├── test_services/     # Service layer tests
 │   ├── integration/       # Integration tests
+│   ├── test_api_bulk.py # API tests for bulk import
+│   ├── test_api_computations.py # API tests for computations
 │   └── conftest.py        # Test configuration
 ├── scripts/               # Utility scripts (Verification, Seeding)
 ├── keycloak/             # Keycloak realm configuration
@@ -113,6 +119,14 @@ erDiagram
         string uploaded_by
     }
 
+    COMPUTATION_JOBS {
+        string id PK "Celery Task ID"
+        uuid script_id FK
+        string user_id
+        string status
+        string start_time
+    }
+
     PROJECT_SENSORS {
         uuid project_id PK, FK
         string sensor_id PK "TimeIO Thing ID"
@@ -137,6 +151,8 @@ erDiagram
     PROJECTS ||--o{ COMPUTATION_SCRIPTS : owns
     PROJECTS ||--o{ PROJECT_SENSORS : links_to
     
+    COMPUTATION_SCRIPTS ||--o{ COMPUTATION_JOBS : executes
+
     GEO_LAYERS ||--o{ GEO_FEATURES : contains
 ```
 
@@ -377,6 +393,16 @@ poetry run pytest tests/test_services/test_time_series_service_coverage.py
 ### 3. Time Series Data
 - **List Series**: `GET /api/v1/time-series/metadata`
 - **Get Data**: `GET /api/v1/time-series/data?series_id={from_metadata_or_feature}`
+
+### 4. Bulk Import
+- **Import GeoJSON**: `POST /api/v1/bulk/import/geojson` (Upload file)
+- **Import Time Series**: `POST /api/v1/bulk/import/timeseries` (Upload JSON/CSV)
+- **Check Task Status**: `GET /api/v1/bulk/tasks/{task_id}`
+
+### 5. Computations
+- **Upload Script**: `POST /api/v1/computations/upload` (Requires Editor Role)
+- **Run Script**: `POST /api/v1/computations/run/{script_id}`
+- **Get Job Status**: `GET /api/v1/computations/tasks/{task_id}`
 
 ## Database Migrations
 
