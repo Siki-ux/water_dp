@@ -18,6 +18,7 @@ class StationType(str, Enum):
     RESERVOIR = "reservoir"
     WELL = "well"
     SPRING = "spring"
+    DATASET = "dataset"
     UNKNOWN = "unknown"
 
 

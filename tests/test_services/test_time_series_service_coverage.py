@@ -41,7 +41,8 @@ class TestTimeSeriesServiceCoverage:
             # Basic call
             ds = service.get_datastreams_for_station(100)
             assert len(ds) == 1
-            assert "Thing/id eq 100" in mock_get.call_args[1]["params"]["$filter"]
+            # URL should contain Things(100)
+            assert "Things(100)" in mock_get.call_args[0][0]
 
             # With parameter filter
             ds_param = service.get_datastreams_for_station(100, parameter="Water Temp")

@@ -86,7 +86,7 @@ services:
       - DEBUG=true
       - VERSION=1.0.0
       - API_PREFIX=/api/v1
-      - CORS_ORIGINS=["*"]
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:3001,http://localhost:8080
       - DATABASE_URL=postgresql://${DATABASE_USER:-postgres}:${DATABASE_PASSWORD:-postgres}@postgres:5432/water_data
       - DATABASE_POOL_SIZE=10
       - DATABASE_MAX_OVERFLOW=20
@@ -103,6 +103,8 @@ services:
       - ACCESS_TOKEN_EXPIRE_MINUTES=30
       - LOG_LEVEL=INFO
       - KEYCLOAK_URL=http://keycloak:8080
+      - KEYCLOAK_ADMIN_USERNAME=${KEYCLOAK_ADMIN:-admin}
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
       - FROST_URL=http://frost:8080/FROST-Server/v1.1
     ports:
       - "8000:8000"

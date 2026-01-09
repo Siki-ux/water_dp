@@ -138,8 +138,11 @@ async def get_data_points(
 
         service = TimeSeriesService(db)
 
-        start_dt = datetime.fromisoformat(start_time) if start_time else None
-        end_dt = datetime.fromisoformat(end_time) if end_time else None
+        try:
+            start_dt = datetime.fromisoformat(start_time) if start_time else None
+            end_dt = datetime.fromisoformat(end_time) if end_time else None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid datetime format: {e}")
 
         # 1. Fetch Datastreams for this station/parameter to get metadata (unit, etc.)
         datastreams_result = service.get_datastreams_for_station(station_id, parameter)
@@ -158,19 +161,29 @@ async def get_data_points(
 
             # 3. Map to Response using metadata
             for dp in data_points:
-                mapped_points.append(
-                    {
-                        "id": dp.id,
-                        "station_id": station_id,
-                        "timestamp": dp.timestamp,
-                        "parameter": op_name,
-                        "value": dp.value,
-                        "unit": uom,
-                        "quality_flag": getattr(dp, "quality_flag", "good"),
-                        "created_at": getattr(dp, "created_at", datetime.now()),
-                        "updated_at": getattr(dp, "updated_at", datetime.now()),
-                    }
-                )
+                # Normalize parameter
+                # FROST might return "Water Level", schema expects "water_level"
+                param_slug = op_name.lower().replace(" ", "_").replace("-", "_")
+
+                # Simple mapping if needed, otherwise rely on slug
+                # Schema enum: water_level, flow_rate, temperature, etc.
+                if param_slug == "water_temperature":
+                    param_slug = "temperature"
+                elif param_slug == "level":
+                    param_slug = "water_level"
+
+                mapped_data = {
+                    "id": dp.id,
+                    "station_id": station_id,
+                    "timestamp": dp.timestamp,
+                    "parameter": param_slug,
+                    "value": dp.value,
+                    "unit": uom,
+                    "quality_flag": getattr(dp, "quality_flag", "good"),
+                    "created_at": getattr(dp, "created_at", datetime.now()),
+                    "updated_at": getattr(dp, "updated_at", datetime.now()),
+                }
+                mapped_points.append(mapped_data)
 
         if quality_filter:
             mapped_points = [
@@ -186,8 +199,9 @@ async def get_data_points(
                 {"start": start_dt, "end": end_dt} if start_dt and end_dt else None
             ),
         )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid datetime format: {e}")
+    except Exception as e:
+        logger.error(f"Error in get_data_points: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
 
 
 @router.get("/data-points/latest", response_model=List[WaterDataPointResponse])

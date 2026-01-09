@@ -14,13 +14,19 @@ class ProjectMemberBase(PydanticBase):
 
 
 class ProjectMemberCreate(ProjectMemberBase):
-    user_id: str
+    user_id: Optional[str] = None
+    username: Optional[str] = None  # Alternative to user_id
+
+
+class ProjectMemberUpdate(BaseModel):
+    role: str = Field(pattern="^(viewer|editor)$")
 
 
 class ProjectMemberResponse(ProjectMemberBase):
     id: UUID
     project_id: UUID
     user_id: str
+    username: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

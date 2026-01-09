@@ -13,6 +13,8 @@ from typing import List, Tuple
 import requests  # Added for TimeIO seeding
 from geoalchemy2.shape import from_shape
 from shapely.geometry import Polygon, box, shape
+from sqlalchemy import and_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -346,12 +348,21 @@ def seed_data(db: Session) -> None:
                     # Update local prop
                     if not feature.properties:
                         feature.properties = {}
-                    # We can't update feature in DB easily if it came from query without session attach/merge.
-                    # But db.flush() earlier means it might be attached.
-                    # If loaded from DB (else block), they are attached.
+
+                    # Log the update
+                    logger.info(
+                        f"Updating feature {feature.feature_id} with station_id {thing_id}"
+                    )
+
+                    # Force update
+                    from sqlalchemy.orm.attributes import flag_modified
+
                     props = dict(feature.properties)
                     props["station_id"] = thing_id
                     feature.properties = props
+                    flag_modified(
+                        feature, "properties"
+                    )  # Ensure SQLAlchemy tracks the JSON change
 
                     ds_name = f"DS_{thing_id}_LEVEL"
                     ds_payload = {
@@ -497,6 +508,7 @@ def seed_data(db: Session) -> None:
         # -------------------------------------------------------------------------
         # PART 3: Seed User Context (Projects, Dashboards)
         # -------------------------------------------------------------------------
+        logger.info("[SEEDING] Starting Part 3: User Context Seeding")
         DEMO_USER_ID = "f5655555-5555-5555-5555-555555555555"  # Demo User ID
 
         # Check if project exists
@@ -512,29 +524,77 @@ def seed_data(db: Session) -> None:
             db.commit()
             db.refresh(project)
 
-            # Add Sensors to Project
-            # Get some thing IDs from features
-            features_with_ids = (
-                db.query(GeoFeature)
-                .filter(GeoFeature.layer_id == "czech_regions")
-                .limit(3)
-                .all()
-            )
-            for f in features_with_ids:
-                props = f.properties
-                if props and "station_id" in props:
-                    sensor_id = props["station_id"]
-                    try:
-                        sql = project_sensors.insert().values(
-                            project_id=project.id, sensor_id=str(sensor_id)
-                        )
-                        db.execute(sql)
-                        logger.info(f"Linked sensor {sensor_id} to project.")
-                    except Exception as e:
-                        logger.warning(f"Failed to link sensor: {e}")
-            db.commit()
+        # Ensure Sensors are Linked (Idempotent)
+        # Get some thing IDs from features
+        logger.info("[SEEDING] Linking sensors to demo project...")
+        features_with_ids = (
+            db.query(GeoFeature).filter(GeoFeature.layer_id == "czech_regions")
+            # .limit(3) # Removed limit
+            .all()
+        )
+        logger.info(
+            f"[SEEDING] Found {len(features_with_ids)} features to check for linking."
+        )
 
-            # Create Dashboard
+        for f in features_with_ids:
+            props = f.properties
+            logger.info(f"Checking feature {f.feature_id} props: {props}")
+            if props and "station_id" in props:
+                # In our seeding logic (line 353), station_id property IS the things IoT ID (int or str)
+                # We store this in the association table.
+                sensor_id = str(props["station_id"])
+
+                # Verify it's not None
+                if sensor_id:
+                    try:
+                        # Use nested transaction (savepoint) to handle potential errors safely without rolling back everything
+                        with db.begin_nested():
+                            # Check existence (redundant but safe)
+                            exists_stmt = project_sensors.select().where(
+                                and_(
+                                    project_sensors.c.project_id == project.id,
+                                    project_sensors.c.sensor_id == sensor_id,
+                                )
+                            )
+                            if not db.execute(exists_stmt).first():
+                                stmt = project_sensors.insert().values(
+                                    project_id=project.id, sensor_id=sensor_id
+                                )
+                                db.execute(stmt)
+                                logger.info(
+                                    f"Linked sensor (Thing ID) {sensor_id} to project."
+                                )
+
+                        db.commit()  # Commit this success immediately
+                    except IntegrityError:
+                        logger.info(
+                            f"Sensor {sensor_id} already linked (IntegrityError ignored)."
+                        )
+                        # No need to rollback explicitely, begin_nested handles savepoint rollback
+                    except Exception as e:
+                        logger.warning(f"Failed to link sensor {sensor_id}: {e}")
+                        # No need to rollback entire session
+        # db.commit() # Already committed individually
+
+        if not db.query(Dashboard).filter(Dashboard.project_id == project.id).first():
+            # Create Dashboard using project.id
+            logger.info("Seeding Demo Dashboard...")
+            dashboard = Dashboard(
+                project_id=project.id,
+                name="Water Levels Overview",
+                is_public=True,
+                layout_config={"layout": "grid"},
+                widgets=[
+                    {
+                        "type": "chart",
+                        "title": "Main River Level",
+                        "sensor_id": "STATION_1",
+                    },
+                    {"type": "map", "title": "Region Map"},
+                ],
+            )
+            db.add(dashboard)
+            db.commit()
             logger.info("Seeding Demo Dashboard...")
             dashboard = Dashboard(
                 project_id=project.id,

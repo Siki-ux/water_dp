@@ -189,6 +189,27 @@ class TimeSeriesService:
             raise TimeSeriesException(f"Failed to fetch stations: {e}")
 
     def get_station(self, station_id: str) -> Optional[Dict]:
+        """
+        Get station (Thing) by ID or property lookup.
+        Tries to fetch by @iot.id first, then by station_id property.
+        """
+        # 1. Try Fetching by Direct ID (FROST @iot.id)
+        # FROST IDs are usually integers.
+        url_id = f"{self._get_frost_url()}/Things({station_id})"
+        params_id = {"$expand": "Locations"}
+
+        try:
+            resp = requests.get(url_id, params=params_id, timeout=self._get_timeout())
+            if resp.status_code == 200:
+                try:
+                    return self._map_thing_to_station(resp.json())
+                except Exception as e:
+                    logger.warning(f"Failed to map station from ID lookup: {e}")
+        except Exception:
+            # Ignore errors (e.g. 404, 400) and proceed to filter lookup
+            pass
+
+        # 2. Fallback: Filter by property 'station_id'
         url = f"{self._get_frost_url()}/Things"
         escaped_id = self._escape_odata_string(station_id)
         params = {
@@ -210,34 +231,44 @@ class TimeSeriesService:
                 return self._map_thing_to_station(val[0])
 
             # If we get here, station was not found
-            raise ResourceNotFoundException(f"Station '{station_id}' not found.")
+            # raise ResourceNotFoundException(f"Station '{station_id}' not found.")
+            # Return None instead of raising, to be friendlier to lists
+            return None
 
         except requests.exceptions.RequestException as e:
             logger.error(
                 f"Failed to fetch station '{station_id}' from FROST: {e}. URL: {url}"
             )
-            raise TimeSeriesException(f"Failed to fetch station details: {e}")
+            # raise TimeSeriesException(f"Failed to fetch station details: {e}")
+            return None
 
     def get_datastreams_for_station(
         self, station_id: int, parameter: Optional[str] = None
     ) -> List[Dict]:
         """Get all datastreams for a station (Thing)."""
-        url = f"{self._get_frost_url()}/Datastreams"
-        filter_parts = [f"Thing/id eq {station_id}"]
+        # Use Navigation Path: Things({id})/Datastreams
+        # This is more robust than filtering by Thing/id
+        url = f"{self._get_frost_url()}/Things({station_id})/Datastreams"
+
+        params = {"$expand": "ObservedProperty"}
+
         if parameter:
             escaped_param = self._escape_odata_string(parameter)
-            filter_parts.append(f"ObservedProperty/name eq '{escaped_param}'")
+            params["$filter"] = f"ObservedProperty/name eq '{escaped_param}'"
 
-        params = {
-            "$filter": " and ".join(filter_parts),
-            "$expand": "ObservedProperty,unitOfMeasurement",
-        }
         try:
             resp = requests.get(url, params=params, timeout=self._get_timeout())
             resp.raise_for_status()
             return resp.json().get("value", [])
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to fetch datastreams for station {station_id}: {e}")
+            # Fallback (e.g. if Thing not found 404) -> return empty list?
+            if (
+                hasattr(e, "response")
+                and e.response is not None
+                and e.response.status_code == 404
+            ):
+                return []
             raise TimeSeriesException(f"Failed to fetch datastreams: {e}")
 
     def update_station(self, station_id: str, data: Dict) -> Optional[Dict]:
@@ -245,33 +276,50 @@ class TimeSeriesService:
         return self.get_station(station_id)
 
     def delete_station(self, station_id: str) -> bool:
+        iot_id = None
+
+        # 1. Try fetching by Direct ID first
+        url_id = f"{self._get_frost_url()}/Things({station_id})"
         try:
-            # Fetch ID first using the property station_id
+            resp = requests.get(url_id, timeout=self._get_timeout())
+            if resp.status_code == 200:
+                # Found by ID
+                iot_id = station_id  # It is the ID
+        except Exception:
+            pass
+
+        # 2. If not found, try filter by station_id property
+        if not iot_id:
             url = f"{self._get_frost_url()}/Things"
             escaped_id = self._escape_odata_string(station_id)
             params = {"$filter": f"properties/station_id eq '{escaped_id}'"}
-            resp = requests.get(url, params=params, timeout=self._get_timeout())
-            resp.raise_for_status()
-
             try:
-                val = resp.json().get("value", [])
-            except (ValueError, requests.exceptions.JSONDecodeError) as json_err:
-                logger.error(
-                    f"Failed to parse JSON response from FROST: {json_err}. URL: {url}"
-                )
-                raise
-            if not val:
-                # Station not found
-                raise ResourceNotFoundException(f"Station '{station_id}' not found.")
+                resp = requests.get(url, params=params, timeout=self._get_timeout())
+                resp.raise_for_status()
 
-            # Assuming the first match is the correct one
-            thing = val[0]
-            iot_id = thing.get("@iot.id")
+                try:
+                    val = resp.json().get("value", [])
+                except (ValueError, requests.exceptions.JSONDecodeError) as json_err:
+                    logger.error(
+                        f"Failed to parse JSON response from FROST: {json_err}. URL: {url}"
+                    )
+                    raise
+                if val:
+                    thing = val[0]
+                    iot_id = thing.get("@iot.id")
+            except Exception as e:
+                logger.error(f"Error finding station {station_id} for deletion: {e}")
+                # Fall through to check if we found anything
+                pass
 
-            # Execute DELETE
-            del_url = f"{self._get_frost_url()}/Things({iot_id})"
+        if not iot_id:
+            # Station not found
+            raise ResourceNotFoundException(f"Station '{station_id}' not found.")
+
+        # Execute DELETE
+        del_url = f"{self._get_frost_url()}/Things({iot_id})"
+        try:
             del_resp = requests.delete(del_url, timeout=self._get_timeout())
-
             if del_resp.status_code in [200, 204]:
                 return True
             else:
@@ -279,6 +327,9 @@ class TimeSeriesService:
                     f"Failed to delete station {station_id} (IoT ID: {iot_id}): {del_resp.status_code} - {del_resp.text}"
                 )
                 del_resp.raise_for_status()
+        except Exception as e:
+            logger.error(f"Error processing delete request for {station_id}: {e}")
+            raise
 
         except Exception as e:
             logger.error(f"Error processing delete_station for {station_id}: {e}")
@@ -459,6 +510,96 @@ class TimeSeriesService:
 
     # --- Time Series Data ---
 
+    def add_bulk_data(self, series_id: str, data_points: List[Any]) -> int:
+        """
+        Bulk add data points to a datastream (identified by name/series_id).
+        """
+        # 1. Resolve Datastream ID
+        # 1. Resolve Datastream ID and Check Thing Location
+        url = f"{self._get_frost_url()}/Datastreams"
+        escaped_name = self._escape_odata_string(series_id)
+        # Expand Thing/Locations to check if location exists
+        params = {
+            "$filter": f"name eq '{escaped_name}'",
+            "$select": "id,Thing",
+            "$expand": "Thing/Locations($select=id)",
+        }
+
+        ds_id = None
+        thing_id = None
+        has_location = False
+
+        try:
+            resp = requests.get(url, params=params, timeout=self._get_timeout())
+            resp.raise_for_status()
+            vals = resp.json().get("value", [])
+            if vals:
+                ds = vals[0]
+                ds_id = ds.get("@iot.id")
+                thing = ds.get("Thing", {})
+                thing_id = thing.get("@iot.id")
+                locs = thing.get("Locations", [])
+                if locs:
+                    has_location = True
+        except Exception as e:
+            logger.error(f"Failed to lookup datastream {series_id}: {e}")
+            raise TimeSeriesException(f"Failed to verify datastream: {e}")
+
+        if not ds_id:
+            raise ResourceNotFoundException(f"Datastream '{series_id}' not found.")
+
+        # Ensure Thing has a location (Required for FoI generation)
+        if thing_id and not has_location:
+            try:
+                self._ensure_thing_location(thing_id)
+            except Exception as e:
+                logger.warning(f"Failed to ensure location for Thing {thing_id}: {e}")
+                # We proceed, but import might fail if FoI cannot be generated.
+
+        if not ds_id:
+            raise ResourceNotFoundException(f"Datastream '{series_id}' not found.")
+
+        # 2. Prepare Payloads
+        # FROST Server might support batch operations, but standard OGC SensorThings API
+        # uses MQTT or individual POSTs. Some implementations have extensions.
+        # We will use individual POSTs for now, but in parallel or loop.
+        # Ideally: Create Observations in bulk?
+        # FROST supports batch requests via $batch, but simpler to just loop for MVP.
+
+        count = 0
+        # TODO: Use $batch endpoint if available for performance.
+        post_url = f"{self._get_frost_url()}/Observations"
+
+        errors = []
+        for dp in data_points:
+            try:
+                payload = {
+                    "phenomenonTime": dp.timestamp.isoformat(),
+                    "result": dp.value,
+                    "Datastream": {"@iot.id": ds_id},
+                    "parameters": {"quality_flag": dp.quality_flag},
+                }
+
+                r = requests.post(post_url, json=payload, timeout=self._get_timeout())
+                if r.status_code in [200, 201]:
+                    count += 1
+                else:
+                    logger.error(
+                        f"FROST Error ({r.status_code}): {r.text} - Payload: {payload}"
+                    )
+                    errors.append(f"{r.status_code}: {r.text}")
+            except Exception as e:
+                logger.error(f"Failed to post observation for {series_id}: {e}")
+                errors.append(str(e))
+
+        if count == 0 and errors:
+            # If completely failed, raise
+            raise TimeSeriesException(
+                f"Failed to import data. Errors: {'; '.join(errors[:3])}..."
+            )
+
+        return count
+
     def create_data_point(self, data_point) -> Dict:
         """Create a new data point (Observation) in FROST."""
 
@@ -549,17 +690,13 @@ class TimeSeriesService:
     ) -> List[Dict]:
         """Get latest data points for a station (Thing)."""
 
-        # 1. Find Datastreams
-        url = f"{self._get_frost_url()}/Datastreams"
-        filter_parts = [f"Thing/id eq {station_id}"]
+        # 1. Find Datastreams via Navigation
+        url = f"{self._get_frost_url()}/Things({station_id})/Datastreams"
+
+        params = {"$expand": "ObservedProperty"}
         if parameter:
             escaped_param = self._escape_odata_string(parameter)
-            filter_parts.append(f"ObservedProperty/name eq '{escaped_param}'")
-
-        params = {
-            "$filter": " and ".join(filter_parts),
-            "$expand": "ObservedProperty",
-        }
+            params["$filter"] = f"ObservedProperty/name eq '{escaped_param}'"
 
         try:
             resp = requests.get(url, params=params, timeout=self._get_timeout())
@@ -1033,3 +1170,151 @@ class TimeSeriesService:
 
     def export_time_series(self, series_id, start, end, format):
         raise NotImplementedError("Export functionality not yet implemented.")
+
+    # --- Helper: Ensure Entities ---
+    def _ensure_observed_property(self, name: str) -> Any:
+        # Check if exists
+        url = f"{self._get_frost_url()}/ObservedProperties"
+        escaped = self._escape_odata_string(name)
+        params = {"$filter": f"name eq '{escaped}'"}
+
+        try:
+            resp = requests.get(url, params=params, timeout=self._get_timeout())
+            if resp.status_code == 200:
+                vals = resp.json().get("value", [])
+                if vals:
+                    return vals[0]["@iot.id"]
+        except Exception:
+            pass
+
+        # Create
+        payload = {
+            "name": name,
+            "definition": "http://www.opengis.net/def/nil/OGC/0/unknown",
+            "description": f"Observed Property: {name}",
+        }
+        resp = requests.post(url, json=payload, timeout=self._get_timeout())
+        resp.raise_for_status()
+        loc = resp.headers["Location"]
+        return loc.split("(")[1].split(")")[0]
+
+    def _ensure_sensor(self, name: str) -> Any:
+        url = f"{self._get_frost_url()}/Sensors"
+        escaped = self._escape_odata_string(name)
+        params = {"$filter": f"name eq '{escaped}'"}
+
+        try:
+            resp = requests.get(url, params=params, timeout=self._get_timeout())
+            if resp.status_code == 200:
+                vals = resp.json().get("value", [])
+                if vals:
+                    return vals[0]["@iot.id"]
+        except Exception:
+            pass
+
+        payload = {
+            "name": name,
+            "description": "Auto-generated sensor for data import",
+            "encodingType": "application/pdf",
+            "metadata": "http://example.org/sensor.pdf",
+        }
+        resp = requests.post(url, json=payload, timeout=self._get_timeout())
+        resp.raise_for_status()
+        loc = resp.headers["Location"]
+        return loc.split("(")[1].split(")")[0]
+
+    def _ensure_thing_location(self, thing_id: Any) -> None:
+        """Ensure a Thing has at least one Location linked."""
+        url = f"{self._get_frost_url()}/Things({thing_id})/Locations"
+        payload = {
+            "name": "Default Location",
+            "description": "Auto-generated default location",
+            "encodingType": "application/vnd.geo+json",
+            "location": {"type": "Point", "coordinates": [0, 0]},
+        }
+        try:
+            resp = requests.post(url, json=payload, timeout=self._get_timeout())
+            if resp.status_code not in [200, 201]:
+                logger.warning(
+                    f"Failed to add location to Thing {thing_id}: {resp.text}"
+                )
+        except Exception as e:
+            logger.error(f"Error adding location to Thing {thing_id}: {e}")
+
+    def ensure_datastream(self, station_id_str: str, parameter: str) -> str:
+        """
+        Ensure Datastream exists for station and parameter.
+        Creates generic Datastream if missing.
+        Returns series_id.
+        """
+        series_id = f"DS_{station_id_str}_{parameter}"
+
+        # Check existence
+        try:
+            if self.get_time_series_metadata_by_id(series_id):
+                return series_id
+        except (ResourceNotFoundException, TimeSeriesException):
+            pass
+
+        # Need Thing ID
+        thing_id = None
+
+        # 1. Try direct navigation via Datastreams URL first (sometimes easier)
+        # But we need Thing ID to create Datastream.
+
+        # 2. Lookup Thing ID assuming station_id_str matches 'properties/station_id' OR '@iot.id'
+        # Try as IoT ID first (if integer-like)
+        if station_id_str.isdigit():
+            url_id = f"{self._get_frost_url()}/Things({station_id_str})"
+            try:
+                r = requests.get(url_id, timeout=self._get_timeout())
+                if r.status_code == 200:
+                    thing_id = r.json().get("@iot.id")
+            except Exception:
+                pass
+
+        if not thing_id:
+            # Try as property station_id
+            url = f"{self._get_frost_url()}/Things"
+            escaped_sid = self._escape_odata_string(station_id_str)
+            params = {
+                "$filter": f"properties/station_id eq '{escaped_sid}'",
+                "$select": "id",
+            }
+            try:
+                resp = requests.get(url, params=params, timeout=self._get_timeout())
+                vals = resp.json().get("value", [])
+                if vals:
+                    thing_id = vals[0]["@iot.id"]
+            except Exception:
+                pass
+
+        if not thing_id:
+            raise ResourceNotFoundException(
+                f"Station '{station_id_str}' not found in Time Series store."
+            )
+
+        # Ensure dependencies
+        op_id = self._ensure_observed_property(parameter)
+        sensor_id = self._ensure_sensor("DataImportSensor")
+
+        # Create Datastream
+        payload = {
+            "name": series_id,
+            "description": f"Datastream for {parameter} at {station_id_str}",
+            "observationType": "http://www.opengis.net/def/observationType/OGC-OM/2.0/OM_Measurement",
+            "unitOfMeasurement": {
+                "name": "Unknown",
+                "symbol": "",
+                "definition": "http://www.qudt.org/qudt/owl/1.0.0/unit/Instances.html#Unknown",
+            },
+            "Thing": {"@iot.id": thing_id},
+            "ObservedProperty": {"@iot.id": op_id},
+            "Sensor": {"@iot.id": sensor_id},
+        }
+
+        ds_url = f"{self._get_frost_url()}/Datastreams"
+        resp = requests.post(ds_url, json=payload, timeout=self._get_timeout())
+        resp.raise_for_status()
+
+        return series_id

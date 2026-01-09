@@ -18,6 +18,10 @@ A reliable Python backend for handling requests between databases, GeoServer, ti
 - **Data Models**: Strong typing with Pydantic V2 models (Schema) and SQLAlchemy ORM (DB).
 - **Monitoring**: Built-in logging, metrics, and health checks.
 - **Docker Support**: Complete containerization with Docker Compose.
+- **Smart Data Management**: 
+    - **Smart ID Resolution**: Access sensors via internal UUIDs or original string IDs (`STATION_123`).
+    - **Auto-Provisioning**: Automatically creates Locations and Features of Interest during data import.
+    - **Bulk Operations**: Efficiently import large historical datasets and delete recursively.
 
 ## Architecture
 
@@ -448,6 +452,16 @@ To support a highly customizable frontend (dashboards, maps, sub-portals) with p
         - **Bulk Time-Series Import**: Efficiently insert millions of sensor readings into TimescaleDB.
         - **CSV/Parquet Support**: Common data formats for hydrology data.
         - **Background Processing**: Use job queue for large imports to avoid timeout.
+
+3.### Gap Analysis for Hydro_portal Frontend (Updated)
+    - **Spatial Analysis**: The `spatial_query` endpoint exists but requires further implementation for complex polygon intersections.
+    - **Project & Dashboard Management**:
+        - **Status**: Backend supports Project-based sharing. Frontend now includes Data Management tabs (Sensors vs Datasets).
+    - **User Registration**: Currently handled via Keycloak Admin Console. A public registration endpoint is planned.
+    - **Fixed Items**:
+        - **Bulk Data Import**: Now fully implemented for both GeoJSON and Time-Series CSVs.
+        - **Sensor Status**: Logic to determine status added to API.
+        - **Static Data Support**: Added "Dataset" type for virtual/imported data sources.
 
 ### TODO
 - [x] **User Config Store**: Design DB schema and API for `UserDashboards` and `WidgetConfigs` (JSONB).
