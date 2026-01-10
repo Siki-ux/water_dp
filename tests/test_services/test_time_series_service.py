@@ -368,8 +368,8 @@ class TestTimeSeriesService:
         with patch("app.services.time_series_service.requests.get") as mock_get:
             mock_get.side_effect = [resp_404, resp_200]
 
-            result = service.get_station("ST_MISSING")
-            assert result is None
+            with pytest.raises(ResourceNotFoundException):
+                service.get_station("ST_MISSING")
 
     def test_create_station_failure(self, service):
         """Test failure during station creation."""

@@ -59,6 +59,14 @@ class KeycloakService:
                 logger.warning(
                     "No Keycloak Admin credentials found. User lookup will fail."
                 )
+                # Fallback/Error: do not proceed with incomplete authentication configuration
+                error_msg = (
+                    "No Keycloak Admin credentials configured. "
+                    "Set KEYCLOAK_ADMIN_CLIENT_SECRET or "
+                    "KEYCLOAK_ADMIN_USERNAME/KEYCLOAK_ADMIN_PASSWORD."
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
 
             cls._admin_client = KeycloakAdmin(**connection_args)
             return cls._admin_client

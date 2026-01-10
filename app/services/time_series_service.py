@@ -205,9 +205,11 @@ class TimeSeriesService:
                     return self._map_thing_to_station(resp.json())
                 except Exception as e:
                     logger.warning(f"Failed to map station from ID lookup: {e}")
-        except Exception:
+        except Exception as e:
             # Ignore errors (e.g. 404, 400) and proceed to filter lookup
-            pass
+            logger.debug(
+                f"Direct lookup for station {station_id} by ID failed, will fallback: {e}"
+            )
 
         # 2. Fallback: Filter by property 'station_id'
         url = f"{self._get_frost_url()}/Things"
@@ -231,16 +233,13 @@ class TimeSeriesService:
                 return self._map_thing_to_station(val[0])
 
             # If we get here, station was not found
-            # raise ResourceNotFoundException(f"Station '{station_id}' not found.")
-            # Return None instead of raising, to be friendlier to lists
-            return None
+            raise ResourceNotFoundException(f"Station '{station_id}' not found.")
 
         except requests.exceptions.RequestException as e:
             logger.error(
                 f"Failed to fetch station '{station_id}' from FROST: {e}. URL: {url}"
             )
-            # raise TimeSeriesException(f"Failed to fetch station details: {e}")
-            return None
+            raise TimeSeriesException(f"Failed to fetch station details: {e}")
 
     def get_datastreams_for_station(
         self, station_id: int, parameter: Optional[str] = None
@@ -250,7 +249,7 @@ class TimeSeriesService:
         # This is more robust than filtering by Thing/id
         url = f"{self._get_frost_url()}/Things({station_id})/Datastreams"
 
-        params = {"$expand": "ObservedProperty"}
+        params = {"$expand": "ObservedProperty,Thing/Locations"}
 
         if parameter:
             escaped_param = self._escape_odata_string(parameter)
@@ -272,8 +271,81 @@ class TimeSeriesService:
             raise TimeSeriesException(f"Failed to fetch datastreams: {e}")
 
     def update_station(self, station_id: str, data: Dict) -> Optional[Dict]:
-        # Not fully implemented for deep patch
-        return self.get_station(station_id)
+        """
+        Update station (Thing) properties in FROST.
+        """
+        iot_id = None
+
+        # 1. Try fetching by Direct ID first
+        url_id = f"{self._get_frost_url()}/Things({station_id})"
+        try:
+            resp = requests.get(url_id, timeout=self._get_timeout())
+            if resp.status_code == 200:
+                iot_id = station_id
+        except Exception:
+            pass
+
+        # 2. If not found, try filter by station_id property
+        if not iot_id:
+            url = f"{self._get_frost_url()}/Things"
+            escaped_id = self._escape_odata_string(station_id)
+            params = {"$filter": f"properties/station_id eq '{escaped_id}'"}
+            try:
+                resp = requests.get(url, params=params, timeout=self._get_timeout())
+                resp.raise_for_status()
+                val = resp.json().get("value", [])
+                if val:
+                    iot_id = val[0].get("@iot.id")
+            except Exception as e:
+                logger.error(f"Error lookup station for update: {e}")
+
+        if not iot_id:
+            return None
+
+        # 3. Construct Payload
+        # Support updating top-level fields and properties
+        payload = {}
+        if "name" in data:
+            payload["name"] = data["name"]
+        if "description" in data:
+            payload["description"] = data["description"]
+        
+        # properties map
+        props_to_update = {}
+        if "station_id" in data:
+            props_to_update["station_id"] = data["station_id"]
+        
+        # Handle Enum or value for status/type
+        if "status" in data:
+            val = data["status"]
+            props_to_update["status"] = getattr(val, "value", str(val))
+        
+        if "station_type" in data:
+            val = data["station_type"]
+            props_to_update["station_type"] = getattr(val, "value", str(val))
+
+        if "organization" in data:
+            props_to_update["organization"] = data["organization"]
+        
+        if "properties" in data and isinstance(data["properties"], dict):
+            props_to_update.update(data["properties"])
+
+        if props_to_update:
+            payload["properties"] = props_to_update
+
+        if not payload:
+            return self.get_station(str(iot_id))
+
+        # 4. Execute PATCH
+        patch_url = f"{self._get_frost_url()}/Things({iot_id})"
+        try:
+            patch_resp = requests.patch(patch_url, json=payload, timeout=self._get_timeout())
+            patch_resp.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to patch station {iot_id}: {e}")
+            raise TimeSeriesException(f"Failed to update station: {e}")
+
+        return self.get_station(str(iot_id))
 
     def delete_station(self, station_id: str) -> bool:
         iot_id = None
@@ -286,6 +358,7 @@ class TimeSeriesService:
                 # Found by ID
                 iot_id = station_id  # It is the ID
         except Exception:
+            # Fallback
             pass
 
         # 2. If not found, try filter by station_id property
@@ -310,7 +383,6 @@ class TimeSeriesService:
             except Exception as e:
                 logger.error(f"Error finding station {station_id} for deletion: {e}")
                 # Fall through to check if we found anything
-                pass
 
         if not iot_id:
             # Station not found
@@ -556,8 +628,7 @@ class TimeSeriesService:
                 logger.warning(f"Failed to ensure location for Thing {thing_id}: {e}")
                 # We proceed, but import might fail if FoI cannot be generated.
 
-        if not ds_id:
-            raise ResourceNotFoundException(f"Datastream '{series_id}' not found.")
+
 
         # 2. Prepare Payloads
         # FROST Server might support batch operations, but standard OGC SensorThings API
@@ -1184,8 +1255,8 @@ class TimeSeriesService:
                 vals = resp.json().get("value", [])
                 if vals:
                     return vals[0]["@iot.id"]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to fetch property {name} (will create): {e}")
 
         # Create
         payload = {
@@ -1209,8 +1280,8 @@ class TimeSeriesService:
                 vals = resp.json().get("value", [])
                 if vals:
                     return vals[0]["@iot.id"]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to fetch sensor {name} (will create): {e}")
 
         payload = {
             "name": name,
@@ -1270,8 +1341,8 @@ class TimeSeriesService:
                 r = requests.get(url_id, timeout=self._get_timeout())
                 if r.status_code == 200:
                     thing_id = r.json().get("@iot.id")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to get thing by ID {station_id_str}: {e}")
 
         if not thing_id:
             # Try as property station_id
@@ -1286,8 +1357,8 @@ class TimeSeriesService:
                 vals = resp.json().get("value", [])
                 if vals:
                     thing_id = vals[0]["@iot.id"]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to lookup thing by property {station_id_str}: {e}")
 
         if not thing_id:
             raise ResourceNotFoundException(

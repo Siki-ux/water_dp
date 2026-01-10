@@ -275,8 +275,11 @@ class ProjectService:
                 k_user = KeycloakService.get_user_by_id(str(m.user_id))
                 if k_user:
                     m_dict["username"] = k_user.get("username")
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: on any failure, keep the default "Unknown" username but log the error.
+                logger.warning(
+                    "Failed to resolve username for user_id %s: %s", m.user_id, exc
+                )
             results.append(ProjectMemberResponse(**m_dict))
 
         return results

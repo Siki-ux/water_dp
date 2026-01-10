@@ -86,6 +86,13 @@ class Settings(BaseSettings):
         """Convert CORS origins string to list."""
         if self.cors_origins == "*":
             return ["*"]
+        if self.cors_origins.strip().startswith("["):
+            import json
+            try:
+                return json.loads(self.cors_origins)
+            except json.JSONDecodeError:
+                # Fallback to comma split if json parse fails
+                pass
         return [origin.strip() for origin in self.cors_origins.split(",")]
 
 

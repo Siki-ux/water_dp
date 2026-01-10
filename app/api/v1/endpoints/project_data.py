@@ -52,6 +52,7 @@ def list_project_things(
     # Optimization: This could be slow for many sensors.
     # Ideal: Schema expansion or Batch API in FROST.
     # For now, we loop.
+    # FIXME: Potential N+1 performance issue. Consider implementing batch retrieval.
     for sid in sensor_ids:
         try:
             station = ts_service.get_station(sid)
