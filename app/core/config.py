@@ -54,6 +54,18 @@ class Settings(BaseSettings):
     keycloak_url: str = Field(default="http://localhost:8081", alias="KEYCLOAK_URL")
     keycloak_realm: str = Field(default="timeio", alias="KEYCLOAK_REALM")
     keycloak_client_id: str = Field(default="timeIO-client", alias="KEYCLOAK_CLIENT_ID")
+    keycloak_admin_client_id: str = Field(
+        default="admin-cli", alias="KEYCLOAK_ADMIN_CLIENT_ID"
+    )
+    keycloak_admin_client_secret: str = Field(
+        default="", alias="KEYCLOAK_ADMIN_CLIENT_SECRET"
+    )
+    keycloak_admin_username: Optional[str] = Field(
+        default=None, alias="KEYCLOAK_ADMIN_USERNAME"
+    )
+    keycloak_admin_password: Optional[str] = Field(
+        default=None, alias="KEYCLOAK_ADMIN_PASSWORD"
+    )
 
     # Monitoring
     sentry_dsn: Optional[str] = Field(default=None, alias="SENTRY_DSN")
@@ -74,6 +86,14 @@ class Settings(BaseSettings):
         """Convert CORS origins string to list."""
         if self.cors_origins == "*":
             return ["*"]
+        if self.cors_origins.strip().startswith("["):
+            import json
+
+            try:
+                return json.loads(self.cors_origins)
+            except json.JSONDecodeError:
+                # Fallback to comma split if json parse fails
+                pass
         return [origin.strip() for origin in self.cors_origins.split(",")]
 
 

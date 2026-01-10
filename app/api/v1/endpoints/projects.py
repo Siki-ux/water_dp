@@ -12,6 +12,7 @@ from app.schemas.user_context import (
     ProjectCreate,
     ProjectMemberCreate,
     ProjectMemberResponse,
+    ProjectMemberUpdate,
     ProjectResponse,
     ProjectSensorResponse,
     ProjectUpdate,
@@ -97,8 +98,52 @@ def add_project_member(
     db: Session = Depends(get_db),
     current_user: dict = Depends(deps.get_current_user),
 ) -> Any:
-    """Add a member to the project."""
+    """
+    Add a member to the project.
+    Can provide `user_id` (UUID) OR `username`.
+    """
+    from app.services.keycloak_service import KeycloakService
+
+    if member_in.username:
+        # Resolve username to ID
+        user = KeycloakService.get_user_by_username(member_in.username)
+        if not user:
+            raise HTTPException(
+                status_code=404, detail=f"User '{member_in.username}' not found."
+            )
+        member_in.user_id = user.get("id")
+
+    if not member_in.user_id:
+        raise HTTPException(
+            status_code=400, detail="Either user_id or username is required."
+        )
+
     return ProjectService.add_member(db, project_id, member_in, current_user)
+
+
+@router.put("/{project_id}/members/{user_id}", response_model=ProjectMemberResponse)
+def update_project_member(
+    project_id: UUID,
+    user_id: str,
+    member_in: ProjectMemberUpdate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(deps.get_current_user),
+) -> Any:
+    """Update a member's role."""
+    return ProjectService.update_member(
+        db, project_id, user_id, member_in.role, current_user
+    )
+
+
+@router.delete("/{project_id}/members/{user_id}")
+def remove_project_member(
+    project_id: UUID,
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(deps.get_current_user),
+) -> Any:
+    """Remove a member from the project."""
+    return ProjectService.remove_member(db, project_id, user_id, current_user)
 
 
 # --- Project Sensors ---

@@ -200,7 +200,10 @@ class TestTimeSeriesService:
 
     def test_get_station(self, service):
         """Test fetching a single station."""
-        mock_response = {
+        # 1. ID Lookup fails (404)
+        # 2. Filter Lookup succeeds (200)
+
+        mock_list_response = {
             "value": [
                 {
                     "@iot.id": 1,
@@ -209,9 +212,17 @@ class TestTimeSeriesService:
                 }
             ]
         }
+
+        # Responses for the two calls
+        resp_404 = MagicMock()
+        resp_404.status_code = 404
+
+        resp_200 = MagicMock()
+        resp_200.status_code = 200
+        resp_200.json.return_value = mock_list_response
+
         with patch("app.services.time_series_service.requests.get") as mock_get:
-            mock_get.return_value.status_code = 200
-            mock_get.return_value.json.return_value = mock_response
+            mock_get.side_effect = [resp_404, resp_200]
 
             station = service.get_station("ST_1")
             assert station is not None
@@ -278,7 +289,8 @@ class TestTimeSeriesService:
 
     def test_delete_station(self, service):
         """Test deleting a station."""
-        # Mock GET response to find the station
+        # 1. ID Lookup -> 404
+        # 2. Filter Lookup -> Found
         mock_get_response = {
             "value": [
                 {
@@ -289,22 +301,32 @@ class TestTimeSeriesService:
             ]
         }
 
+        # Responses
+        resp_404 = MagicMock()
+        resp_404.status_code = 404
+
+        resp_200 = MagicMock()
+        resp_200.status_code = 200
+        resp_200.json.return_value = mock_get_response
+
+        resp_del = MagicMock()
+        resp_del.status_code = 204
+
         with patch("app.services.time_series_service.requests.get") as mock_get, patch(
             "app.services.time_series_service.requests.delete"
         ) as mock_delete:
-            # Setup GET
-            mock_get.return_value.status_code = 200
-            mock_get.return_value.json.return_value = mock_get_response
+            # Setup GET: ID lookup fails, Filter lookup succeeds
+            mock_get.side_effect = [resp_404, resp_200]
 
             # Setup DELETE
-            mock_delete.return_value.status_code = 204
+            mock_delete.return_value = resp_del
 
             # Execute
             result = service.delete_station("ST_DEL")
 
             # Assert
             assert result is True
-            mock_get.assert_called_once()
+            assert mock_get.call_count == 2  # ID lookup + Filter lookup
             # Verify delete called with correct ID
             args, _ = mock_delete.call_args
             assert "Things(123)" in args[0]
@@ -314,11 +336,18 @@ class TestTimeSeriesService:
         # Mock GET response - empty
         mock_get_response = {"value": []}
 
+        resp_404 = MagicMock()
+        resp_404.status_code = 404
+
+        resp_200 = MagicMock()
+        resp_200.status_code = 200
+        resp_200.json.return_value = mock_get_response
+
         with patch("app.services.time_series_service.requests.get") as mock_get, patch(
             "app.services.time_series_service.requests.delete"
         ) as mock_delete:
-            mock_get.return_value.status_code = 200
-            mock_get.return_value.json.return_value = mock_get_response
+
+            mock_get.side_effect = [resp_404, resp_200]
 
             with pytest.raises(ResourceNotFoundException):
                 service.delete_station("ST_MISSING")
@@ -328,9 +357,16 @@ class TestTimeSeriesService:
     def test_get_station_not_found(self, service):
         """Test getting a non-existent station."""
         mock_response = {"value": []}
+
+        resp_404 = MagicMock()
+        resp_404.status_code = 404
+
+        resp_200 = MagicMock()
+        resp_200.status_code = 200
+        resp_200.json.return_value = mock_response
+
         with patch("app.services.time_series_service.requests.get") as mock_get:
-            mock_get.return_value.status_code = 200
-            mock_get.return_value.json.return_value = mock_response
+            mock_get.side_effect = [resp_404, resp_200]
 
             with pytest.raises(ResourceNotFoundException):
                 service.get_station("ST_MISSING")

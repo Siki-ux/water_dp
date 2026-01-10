@@ -8,6 +8,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
 from app.core.config import settings
+from app.core.database import get_db  # noqa
 from app.core.security import verify_token
 
 oauth2_scheme = OAuth2PasswordBearer(
@@ -69,3 +70,12 @@ async def get_current_active_superuser(
             detail="The user doesn't have enough privileges",
         )
     return current_user
+
+
+def get_time_series_service(
+    db=Depends(get_db),
+) -> Any:
+    """Dependency for TimeSeriesService."""
+    from app.services.time_series_service import TimeSeriesService
+
+    return TimeSeriesService(db)

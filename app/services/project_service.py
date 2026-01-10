@@ -8,7 +8,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.user_context import Project, ProjectMember, project_sensors
-from app.schemas.user_context import ProjectCreate, ProjectMemberCreate, ProjectUpdate
+from app.schemas.user_context import (
+    ProjectCreate,
+    ProjectMemberCreate,
+    ProjectMemberResponse,
+    ProjectUpdate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -213,7 +218,7 @@ class ProjectService:
             project_sensors.c.project_id == project_id
         )
         result = db.execute(stmt).scalars().all()
-        return list(result)
+        return [str(r) for r in result]
 
     # --- Member Management ---
 
@@ -244,8 +249,94 @@ class ProjectService:
     @staticmethod
     def list_members(
         db: Session, project_id: UUID, user: Dict[str, Any]
-    ) -> List[ProjectMember]:
+    ) -> List[ProjectMemberResponse]:
         ProjectService._check_access(db, project_id, user, required_role="viewer")
-        return (
+        members = (
             db.query(ProjectMember).filter(ProjectMember.project_id == project_id).all()
         )
+
+        # Populate usernames
+        from app.services.keycloak_service import KeycloakService
+
+        results = []
+        for m in members:
+            # Convert SQLAlchemy model to Pydantic dict foundation
+            m_dict = {
+                "id": m.id,
+                "project_id": m.project_id,
+                "user_id": m.user_id,
+                "role": m.role,
+                "created_at": m.created_at,
+                "updated_at": m.updated_at,
+                "username": "Unknown",
+            }
+            # Try resolve username
+            try:
+                k_user = KeycloakService.get_user_by_id(str(m.user_id))
+                if k_user:
+                    m_dict["username"] = k_user.get("username")
+            except Exception as exc:
+                # Best-effort: on any failure, keep the default "Unknown" username but log the error.
+                logger.warning(
+                    "Failed to resolve username for user_id %s: %s", m.user_id, exc
+                )
+            results.append(ProjectMemberResponse(**m_dict))
+
+        return results
+
+    @staticmethod
+    def update_member(
+        db: Session, project_id: UUID, user_id: str, role: str, user: Dict[str, Any]
+    ) -> ProjectMember:
+        # Only Owner/Admin can manage members
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        is_owner = str(project.owner_id) == str(user.get("sub"))
+        if not (is_owner or ProjectService._is_admin(user)):
+            raise HTTPException(status_code=403, detail="Only Owner can manage members")
+
+        member = (
+            db.query(ProjectMember)
+            .filter(
+                ProjectMember.project_id == project_id, ProjectMember.user_id == user_id
+            )
+            .first()
+        )
+
+        if not member:
+            raise HTTPException(status_code=404, detail="Member not found")
+
+        member.role = role
+        db.commit()
+        db.refresh(member)
+        return member
+
+    @staticmethod
+    def remove_member(
+        db: Session, project_id: UUID, user_id: str, user: Dict[str, Any]
+    ):
+        # Only Owner/Admin can manage members
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        is_owner = str(project.owner_id) == str(user.get("sub"))
+        if not (is_owner or ProjectService._is_admin(user)):
+            raise HTTPException(status_code=403, detail="Only Owner can manage members")
+
+        # Prevent owner from removing themselves? (Optional, but good practice)
+        if str(user_id) == str(project.owner_id):
+            raise HTTPException(
+                status_code=400, detail="Owner cannot be removed from project"
+            )
+
+        stmt = ProjectMember.__table__.delete().where(
+            and_(
+                ProjectMember.project_id == project_id, ProjectMember.user_id == user_id
+            )
+        )
+        db.execute(stmt)
+        db.commit()
+        return {"status": "removed"}

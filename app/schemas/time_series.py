@@ -314,3 +314,43 @@ class InterpolationResponse(BaseModel):
     interval: str
     gaps_filled: int
     metadata: Dict[str, Any]
+
+
+class StationBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+    station_id: str = Field(..., description="Unique station identifier")
+    station_type: str = Field(default="unknown")
+    status: str = Field(default="unknown")
+    organization: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    elevation: Optional[float] = None
+    properties: Optional[Dict[str, Any]] = None
+
+
+class StationCreate(StationBase):
+    pass
+
+
+class StationUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    station_type: Optional[str] = None
+    status: Optional[str] = None
+    organization: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    elevation: Optional[float] = None
+    properties: Optional[Dict[str, Any]] = None
+
+
+class StationResponse(StationBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+    # Computed fields
+    is_active: bool = False
+    last_activity: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)

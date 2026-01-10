@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 
+import app.services.keycloak_service as keycloak_service
 from app.api import deps
 from app.main import app
 from app.schemas.user_context import (
@@ -98,7 +99,15 @@ def test_get_project(client, normal_user_token, mock_project_service):
     assert response.json()["id"] == str(pid)
 
 
-def test_project_members(client, normal_user_token, mock_project_service):
+@pytest.fixture
+def mock_keycloak_service():
+    with patch.object(keycloak_service, "KeycloakService") as mock:
+        yield mock
+
+
+def test_project_members(
+    client, normal_user_token, mock_project_service, mock_keycloak_service
+):
     pid = uuid4()
     mock_project_service.list_members.return_value = []
 
@@ -116,6 +125,11 @@ def test_project_members(client, normal_user_token, mock_project_service):
         created_at="2024-01-01",
         updated_at="2024-01-01",
     )
+
+    # Mock Keycloak lookup for username case (if used, though here user_id is provided directly)
+    # The endpoint imports KeycloakService. If it wasn't mocked, it might try to init and fail
+    # if setup code runs on import or usage.
+
     resp_add = client.post(
         f"/api/v1/projects/{pid}/members", json={"user_id": "other", "role": "viewer"}
     )
