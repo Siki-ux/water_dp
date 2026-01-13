@@ -9,6 +9,7 @@ from app.api.v1.endpoints import (
     bulk,
     computations,
     dashboards,
+    datasources,
     geospatial,
     project_data,
     projects,
@@ -34,3 +35,4 @@ api_router.include_router(bulk.router, prefix="/bulk", tags=["bulk"])
 api_router.include_router(
     computations.router, prefix="/computations", tags=["computations"]
 )
+api_router.include_router(datasources.router, tags=["datasources"])

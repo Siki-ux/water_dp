@@ -3,40 +3,6 @@ from unittest.mock import patch
 from app.core.exceptions import ResourceNotFoundException, TimeSeriesException
 
 
-def test_create_station_success(client):
-    from datetime import datetime
-
-    mock_station = {
-        "id": 1,
-        "name": "New Station",
-        "station_id": "ST_N",
-        "latitude": 10.0,
-        "longitude": 20.0,
-        "station_type": "river",
-        "status": "active",
-        "organization": "Org",
-        "created_at": datetime.now(),
-        "updated_at": datetime.now(),
-    }
-    with patch("app.api.v1.endpoints.water_data.TimeSeriesService") as MockService:
-        MockService.return_value.create_station.return_value = mock_station
-
-        response = client.post(
-            "/api/v1/water-data/stations",
-            json={
-                "name": "New Station",
-                "station_id": "ST_N",
-                "latitude": 10.0,
-                "longitude": 20.0,
-                "station_type": "river",
-                "status": "active",
-                "organization": "Org",
-            },
-        )
-        assert response.status_code == 201
-        assert response.json()["name"] == "New Station"
-
-
 def test_get_stations_success(client):
     with patch("app.api.v1.endpoints.water_data.TimeSeriesService") as MockService:
         MockService.return_value.get_stations.return_value = []

@@ -41,6 +41,16 @@ async def lifespan(app: FastAPI):
             finally:
                 db.close()
 
+        # Always register system datasources (infra discovery)
+        from app.core.database import SessionLocal
+        from app.core.system_datasources import register_system_datasources
+
+        db_sys = SessionLocal()
+        try:
+            register_system_datasources(db_sys)
+        finally:
+            db_sys.close()
+
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
         raise

@@ -8,7 +8,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, has_role
+from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.schemas.water_data import (
     BulkDataPointCreate,
@@ -19,25 +19,12 @@ from app.schemas.water_data import (
     WaterDataPointResponse,
     WaterQualityCreate,
     WaterQualityResponse,
-    WaterStationCreate,
     WaterStationResponse,
-    WaterStationUpdate,
 )
 from app.services.time_series_service import TimeSeriesService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-@router.post("/stations", response_model=WaterStationResponse, status_code=201)
-async def create_station(
-    station: WaterStationCreate,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-):
-    """Create a new water station."""
-    service = TimeSeriesService(db)
-    return service.create_station(station)
 
 
 @router.get("/stations", response_model=StationListResponse)
@@ -67,29 +54,6 @@ async def get_station(station_id: str, db: Session = Depends(get_db)):
     """Get a specific water station."""
     service = TimeSeriesService(db)
     return service.get_station(station_id)
-
-
-@router.put("/stations/{station_id}", response_model=WaterStationResponse)
-async def update_station(
-    station_id: str,
-    station_update: WaterStationUpdate,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-):
-    """Update a water station."""
-    service = TimeSeriesService(db)
-    update_data = station_update.model_dump(exclude_unset=True)
-    return service.update_station(station_id, update_data)
-
-
-@router.delete(
-    "/stations/{station_id}", status_code=204, dependencies=[Depends(has_role("admin"))]
-)
-async def delete_station(station_id: str, db: Session = Depends(get_db)):
-    """Delete a water station."""
-    service = TimeSeriesService(db)
-    service.delete_station(station_id)
-    return {"message": "Station deleted successfully"}
 
 
 @router.post("/data-points", response_model=WaterDataPointResponse, status_code=201)

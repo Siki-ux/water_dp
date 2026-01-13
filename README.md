@@ -97,13 +97,31 @@ water_dp/
 
 ### 5. Database Schema
 
-The database relies on three main groups of tables: **Geospatial (GIS)**, **User Context (Projects)**, and **Computations**.
+The database is shared but logically segmented into three distinct domains. The usage of this hybrid schema allows us to separate **Application Logic** from **Data Ingestion** and **High-Volume Storage**.
+
+#### 1. Water DP (User Context & GIS)
+These tables manage the modern application state, user projects, and geospatial layers.
+- **projects**: The central user workspace. Linked to Keycloak users via `owner_id`.
+- **project_sensors**: A lightweight link table connecting a **Project** (UUID) to a **TimeIO Sensor** (String ID).
+- **geo_layers / geo_features**: PostGIS-enabled tables for storing map configurations and geometries (polygons, points).
+- **computation_scripts / computation_jobs**: Store user-uploaded Python scripts and track the status of asynchronous Celery tasks.
+
+#### 2. Thing Management (Ingestion Config)
+These legacy tables are used by the **Thing Management API** to configure how data enters the system.
+- **project_tbl** (Legacy): The "backend" view of a project. Used to group database credentials.
+- **mqtt / database**: Stores credentials for the ingestion services (MQTT Broker, Timescale Writer).
+
+#### 3. TimeIO / OGC (Sensor Data)
+These tables implement the **OGC SensorThings API** standard and are managed by the **Frost Server**.
+- **THINGS**: Represents the physical or virtual station.
+- **DATASTREAMS**: A stream of data (e.g., "Water Level") associated with a Thing.
+- **OBSERVATIONS**: The actual time-series data points (Timestamp + Value), stored in **TimescaleDB** hypertables for performance.
 
 ```mermaid
 erDiagram
-    %% User Context
+    %% --- Domain: Water DP (Application) ---
     PROJECTS {
-        uuid id PK
+        uuid id PK "New Project ID"
         string name
         string owner_id "Keycloak User ID"
     }
@@ -111,7 +129,6 @@ erDiagram
     DASHBOARDS {
         uuid id PK
         uuid project_id FK
-        string name
         json layout_config
     }
     
@@ -120,44 +137,69 @@ erDiagram
         uuid project_id FK
         string name
         string filename
-        string uploaded_by
     }
 
     COMPUTATION_JOBS {
         string id PK "Celery Task ID"
         uuid script_id FK
-        string user_id
         string status
-        string start_time
     }
-
+    
     PROJECT_SENSORS {
         uuid project_id PK, FK
-        string sensor_id PK "TimeIO Thing ID"
+        string sensor_id PK "TimeIO String ID"
     }
-
-    %% Geospatial
-    GEO_LAYERS {
-        string layer_name PK
-        string layer_type
-        string workspace
-    }
-
-    GEO_FEATURES {
-        string feature_id PK
-        string layer_id FK
-        geometry geometry
-        jsonb properties
-    }
-
-    %% Relationships
-    PROJECTS ||--o{ DASHBOARDS : contains
-    PROJECTS ||--o{ COMPUTATION_SCRIPTS : owns
-    PROJECTS ||--o{ PROJECT_SENSORS : links_to
-    
-    COMPUTATION_SCRIPTS ||--o{ COMPUTATION_JOBS : executes
 
     GEO_LAYERS ||--o{ GEO_FEATURES : contains
+
+    %% --- Domain: Thing Management (Ingestion) ---
+    PROJECT_TBL {
+        int id PK "Legacy ID"
+        uuid uuid "Sync ID"
+        string name
+    }
+    
+    MQTT_CONFIG {
+        int id PK
+        int project_id FK
+        string topic
+        string user
+    }
+
+    %% --- Domain: TimeIO / OGC (Data) ---
+    THINGS {
+        bigint id PK "Internal ID"
+        string name "Unique Name"
+        json properties "Contains station_id"
+    }
+    
+    DATASTREAMS {
+        bigint id PK
+        bigint thing_id FK
+    }
+    
+    OBSERVATIONS {
+        bigint id PK
+        bigint datastream_id FK
+        timestamp phenomenonTime
+        double result
+    }
+
+    %% --- Relationships ---
+    
+    %% App User Context
+    PROJECTS ||--o{ DASHBOARDS : contains
+    PROJECTS ||--o{ PROJECT_SENSORS : links_to
+    
+    %% Logical Link: App -> TimeIO
+    PROJECT_SENSORS }|..|| THINGS : "Refers to (by Name/Prop)"
+
+    %% Ingestion Config
+    PROJECT_TBL ||--o{ MQTT_CONFIG : owns
+
+    %% OGC Hierarchy
+    THINGS ||--o{ DATASTREAMS : has
+    DATASTREAMS ||--o{ OBSERVATIONS : contains
 ```
 
 ### System Architecture Diagram
@@ -223,6 +265,30 @@ graph TB
     Sensors -->|HTTP| Frost
 ```
 
+## TimeIO & Frontend Architecture Strategy
+*(Added Jan 2026)*
+
+To accelerate development and leverage existing robust tools, we have adopted a **"Microservice UI Composition"** strategy for Device Management.
+
+### Decision
+Instead of rebuilding complex device management interfaces (Parser config, Access Policies, Metadata editing) in the `hydro_portal`, we **reuse** the existing [TimeIO Thing Management](https://helmholtz.software/software/timeio) UI.
+
+### Integration Workflow
+1.  **Device Provisioning**: Performed in **TimeIO TM** (`http://localhost:8082`).
+    *   Admins create Things, Datastreams, and Parsers here.
+2.  **Visualization & Projects**: Performed in **Hydro Portal** (`http://localhost:3000`).
+    *   Users **"Link"** existing TimeIO Things to their Projects instead of creating them from scratch.
+    *   Hydro Portal focuses purely on Dashboards, Maps, and Analytics.
+3.  **Single Sign-On (SSO)**:
+    *   Both applications share the same **Keycloak** Identity Provider.
+    *   Users seamlessly switch between "Dashboards" (Hydro Portal) and "Device Settings" (TimeIO TM) without re-authenticating.
+
+### Implementation Details
+*   **Frontend**: `hydro_portal` removes "Create Sensor" forms in favor of a "Link Sensor" modal (listing things from `GET /things`).
+*   **Navigation**: "Manage Devices" links in Hydro Portal redirect to TimeIO TM.
+*   **Keycloak Client**: The `timeIO-client` is configured to allow redirects to both `http://localhost:3000` and `http://localhost:8082`.
+
+
 ## TimeIO Integration
 ### Why TimeIO?
 The project integrates the [TimeIO](https://helmholtz.software/software/timeio) stack to provide a robust, standardized, and scalable solution for handling sensor data.
@@ -267,6 +333,14 @@ The system is seeded with default users and roles (e.g., in `scripts/configure_k
 
 > [!CRITICAL]
 > **Production Safety**: You **MUST** modify these hardcoded users, passwords, and role assignments before deploying to any production environment. The default `admin-siki` and `frontendbus` users provide extensive access that would be dangerous if left unchanged.
+
+### 4. Sensor Discovery & Sharing (Trusted Gateway Pattern)
+The platform is designed as a **Trusted Research/Internal Workspace**, which influences the sensor security model:
+
+*   **Open Discovery**: Any authenticated user can "discover" and list *all* available sensors within the underlying TimeIO infrastructure. This is by design, treating sensors as shared public infrastructure (e.g., widely used River Gauges).
+*   **Permissive Linking**: There is currently no strict "Sensor Ownership" enforcement at the Project level. Any user can link any available sensor to their project to view its data.
+*   **Project Privacy**: While sensors are public, **Projects are Private**. User A cannot view User B’s Project dashboard, analysis, or computed data.
+*   **Production Note**: If multi-tenant isolation is required (where User A cannot even *see* User B's sensors), the `link_sensor` API would need to enforce ownership checks against the TimeIO Management API.
 
 ## Quick Start
 
@@ -318,6 +392,13 @@ The system is seeded with default users and roles (e.g., in `scripts/configure_k
    poetry run python -m app.reset_and_seed
    ```
    *This script drops existing tables, re-initializes schema, and seeds standard stations and time-series data.*
+
+   **Thing Management Seeding:**
+   The `timeio_tm_seeder` service automatically runs `scripts/seed_thing_management.py` on startup. This script:
+   - Patches the Thing Management database to ensure compatibility with the API.
+   - Syncs sensors from FROST Server (e.g., `Auto-Simulated Sensor`) into Thing Management.
+   - Links "MyProject" and creates default parsers.
+   - Enables simulation for imported sensors.
 
 5. **Access the application**
    - **API Docs**: [http://localhost:8000/api/v1/docs](http://localhost:8000/api/v1/docs)

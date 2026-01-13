@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     keycloak_admin_password: Optional[str] = Field(
         default=None, alias="KEYCLOAK_ADMIN_PASSWORD"
     )
+    encryption_key: Optional[str] = Field(default=None, alias="ENCRYPTION_KEY")
 
     # Monitoring
     sentry_dsn: Optional[str] = Field(default=None, alias="SENTRY_DSN")
