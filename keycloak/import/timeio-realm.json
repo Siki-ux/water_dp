@@ -158,7 +158,12 @@
         }
       ],
       "realmRoles": [
-        "default-roles-timeio"
+        "default-roles-timeio",
+        "offline_access",
+        "uma_authorization"
+      ],
+      "groups": [
+        "/UFZ-TSM:MyProject"
       ]
     },
     {
@@ -177,7 +182,12 @@
         }
       ],
       "realmRoles": [
-        "default-roles-timeio"
+        "default-roles-timeio",
+        "offline_access",
+        "uma_authorization"
+      ],
+      "groups": [
+        "/UFZ-TSM:MyProject"
       ]
     },
     {
@@ -198,6 +208,9 @@
       "realmRoles": [
         "default-roles-timeio",
         "admin"
+      ],
+      "groups": [
+        "/UFZ-TSM:MyProject"
       ]
     }
   ],
@@ -217,6 +230,47 @@
       ],
       "webOrigins": [
         "+"
+      ],
+      "protocolMappers": [
+        {
+          "name": "eduperson_entitlement",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "eduperson_entitlement",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "eduperson_unique_id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "username",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "eduperson_unique_id",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "eduperson_principal_name",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "email",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "eduperson_principal_name",
+            "userinfo.token.claim": "true"
+          }
+        }
       ]
     }
   ],
@@ -230,5 +284,15 @@
         "containerId": "35ec6dcb-8b6b-4581-b21d-ea6aae80a789"
       }
     ]
-  }
+  },
+  "groups": [
+    {
+      "name": "UFZ-TSM:MyProject",
+      "path": "/UFZ-TSM:MyProject",
+      "attributes": {},
+      "realmRoles": [],
+      "clientRoles": {},
+      "subGroups": []
+    }
+  ]
 }

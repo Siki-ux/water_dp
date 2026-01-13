@@ -292,6 +292,14 @@ The system is seeded with default users and roles (e.g., in `scripts/configure_k
 > [!CRITICAL]
 > **Production Safety**: You **MUST** modify these hardcoded users, passwords, and role assignments before deploying to any production environment. The default `admin-siki` and `frontendbus` users provide extensive access that would be dangerous if left unchanged.
 
+### 4. Sensor Discovery & Sharing (Trusted Gateway Pattern)
+The platform is designed as a **Trusted Research/Internal Workspace**, which influences the sensor security model:
+
+*   **Open Discovery**: Any authenticated user can "discover" and list *all* available sensors within the underlying TimeIO infrastructure. This is by design, treating sensors as shared public infrastructure (e.g., widely used River Gauges).
+*   **Permissive Linking**: There is currently no strict "Sensor Ownership" enforcement at the Project level. Any user can link any available sensor to their project to view its data.
+*   **Project Privacy**: While sensors are public, **Projects are Private**. User A cannot view User B’s Project dashboard, analysis, or computed data.
+*   **Production Note**: If multi-tenant isolation is required (where User A cannot even *see* User B's sensors), the `link_sensor` API would need to enforce ownership checks against the TimeIO Management API.
+
 ## Quick Start
 
 ### Prerequisites
@@ -342,6 +350,13 @@ The system is seeded with default users and roles (e.g., in `scripts/configure_k
    poetry run python -m app.reset_and_seed
    ```
    *This script drops existing tables, re-initializes schema, and seeds standard stations and time-series data.*
+
+   **Thing Management Seeding:**
+   The `timeio_tm_seeder` service automatically runs `scripts/seed_thing_management.py` on startup. This script:
+   - Patches the Thing Management database to ensure compatibility with the API.
+   - Syncs sensors from FROST Server (e.g., `Auto-Simulated Sensor`) into Thing Management.
+   - Links "MyProject" and creates default parsers.
+   - Enables simulation for imported sensors.
 
 5. **Access the application**
    - **API Docs**: [http://localhost:8000/api/v1/docs](http://localhost:8000/api/v1/docs)

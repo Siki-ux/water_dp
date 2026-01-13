@@ -161,3 +161,45 @@ def execute_query(
         return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/datasources/available-sensors")
+def get_available_sensors(
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(get_current_user),
+):
+    """
+    Get list of available sensors (Things) from TimeIO (FROST).
+    Used for linking sensors to projects.
+    """
+    import requests
+    from app.core.config import settings
+
+    frost_url = settings.frost_url
+    try:
+        # Fetch Things from FROST
+        # We limit to 100 for now, or implement pagination if needed.
+        # Minimal fields: id, name, description, properties
+        response = requests.get(
+            f"{frost_url}/Things?$select=@iot.id,name,description,properties&$top=100",
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        things = data.get("value", [])
+        
+        # Transform for frontend if needed, or return raw.
+        # Frontend expects id, name, description. properties.
+        # FROST returns @iot.id. We map it to id.
+        formatted = []
+        for t in things:
+            formatted.append({
+                "id": str(t.get("@iot.id")),
+                "name": t.get("name"),
+                "description": t.get("description"),
+                "properties": t.get("properties", {})
+            })
+            
+        return formatted
+
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch sensors from TimeIO: {e}")

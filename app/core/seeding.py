@@ -682,9 +682,129 @@ def seed_data(db: Session) -> None:
             else:
                 logger.info("Computation script already exists/checked.")
 
-        logger.info("Demo Project and Dashboard seeded/checked.")
+        # -------------------------------------------------------------------------
+        # PART 4: Advanced Scenarios & Simulator Setup
+        # -------------------------------------------------------------------------
+        logger.info("[SEEDING] Starting Part 4: Advanced Scenarios & Simulator")
+        seed_advanced_logic(db)
+        seed_simulator_entities()
+
+        logger.info("Demo Project, Dashboard, and Advanced Scenarios seeded/checked.")
 
     except Exception as e:
         logger.error(f"Seeding failed: {e}")
         db.rollback()
         raise e
+
+
+def seed_advanced_logic(db: Session):
+    """
+    Creates multiple projects and users to test access control.
+    Merged from scripts/seed_advanced.py
+    """
+    from app.models.user_context import Project, ProjectMember, project_sensors
+
+    SIKI_ID = "user-siki-123"
+    USER2_ID = "user-2-456"
+
+    # 1. Add Siki to Demo Project
+    p1 = db.query(Project).filter(Project.name == "Demo Project").first()
+    if p1:
+        member = db.query(ProjectMember).filter_by(project_id=p1.id, user_id=SIKI_ID).first()
+        if not member:
+            logger.info(f"Adding Siki ({SIKI_ID}) to Demo Project...")
+            db.add(ProjectMember(project_id=p1.id, user_id=SIKI_ID, role="editor"))
+            db.commit()
+
+    # 2. Create Project 2
+    p2 = db.query(Project).filter(Project.name == "Demo Project 2").first()
+    if not p2:
+        logger.info("Creating Demo Project 2...")
+        p2 = Project(
+            name="Demo Project 2",
+            description="Second project for access control testing.",
+            owner_id=USER2_ID
+        )
+        db.add(p2)
+        db.commit()
+        db.refresh(p2)
+        
+        # Add User 2 as Admin
+        db.add(ProjectMember(project_id=p2.id, user_id=USER2_ID, role="admin"))
+        db.commit()
+
+    # 3. Link Sensors to Project 2 (IDs 1 and 5 if available)
+    target_sensors = ["1", "5"]
+    for sid in target_sensors:
+        exists = db.query(project_sensors).filter_by(project_id=p2.id, sensor_id=sid).first()
+        if not exists:
+            # Only link if not already linked (simple check)
+            # We don't check if sensor exists in FROST here, assuming basic seeding created ID 1
+            stmt = project_sensors.insert().values(project_id=p2.id, sensor_id=sid)
+            try:
+                db.execute(stmt)
+                db.commit()
+            except Exception:
+                db.rollback()
+
+
+def seed_simulator_entities():
+    """
+    Creates sensors specifically for the Simulator service and Generic Unlinked testing.
+    """
+    FROST_URL = settings.frost_url
+    try:
+         requests.get(FROST_URL, timeout=5)
+    except:
+        FROST_URL = "http://localhost:8083/FROST-Server/v1.1"
+
+    # Helper
+    def create_thing(payload):
+        try:
+            # Check if exists by name
+            name = payload["name"]
+            r = requests.get(f"{FROST_URL}/Things?$filter=name eq '{name}'", timeout=5)
+            if r.status_code == 200 and r.json().get("value"):
+                return # Already exists
+            
+            resp = requests.post(f"{FROST_URL}/Things", json=payload, timeout=5)
+            if resp.status_code == 201:
+                logger.info(f"Created Simulator Thing: {name}")
+        except Exception as e:
+            logger.warning(f"Failed to create sim thing {payload.get('name')}: {e}")
+
+    # 1. Auto-Simulated Sensor (For Simulator Service)
+    create_thing({
+        "name": "Auto-Simulated Sensor",
+        "description": "Automatically created for Simulator service.",
+        "properties": {
+            "station_id": "SIM_AUTO_01",
+            "simulated": "true",
+            "type": "river",
+            "status": "active"
+        },
+        "Locations": [{
+            "name": "Sim Location",
+            "description": "Virtual",
+            "encodingType": "application/vnd.geo+json",
+            "location": {"type": "Point", "coordinates": [14.5, 50.1]}
+        }]
+    })
+
+    # 2. Unlinked Sensors (For UI Testing)
+    for i in range(1, 6):
+        create_thing({
+            "name": f"Unlinked Sensor {i}",
+            "description": "Available for linking.",
+            "properties": {
+                "station_id": f"UNLINKED_0{i}",
+                "status": "active",
+                "type": "river"
+            },
+            "Locations": [{
+                "name": f"Loc {i}",
+                "description": "Location",
+                "encodingType": "application/vnd.geo+json",
+                "location": {"type": "Point", "coordinates": [14.4 + (i*0.01), 50.0]}
+            }]
+        })

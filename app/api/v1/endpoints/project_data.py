@@ -103,88 +103,41 @@ def list_project_things(
     return results
 
 
-@router.post("/{project_id}/things", response_model=StationResponse)
-def create_project_thing(
+@router.post("/{project_id}/sensors/{sensor_id}")
+def link_project_sensor(
     project_id: UUID,
-    thing_in: StationCreate,
+    sensor_id: str,
     db: Session = Depends(get_db),
     current_user: dict = Depends(deps.get_current_user),
-    ts_service: TimeSeriesService = Depends(deps.get_time_series_service),
 ) -> Any:
-    """Create a new Thing (Station) and link to Project."""
+    """Link an existing TimeIO Sensor (@iot.id) to the Project."""
     # Check Editor access
     ProjectService._check_access(db, project_id, current_user, required_role="editor")
-
-    # Create in FROST
-    try:
-        created_station_dict = ts_service.create_station(thing_in)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create station: {e}")
 
     # Link to Project
     try:
-        ProjectService.add_sensor(
-            db, project_id, created_station_dict["station_id"], current_user
-        )
+        ProjectService.add_sensor(db, project_id, sensor_id, current_user)
     except Exception as e:
-        # Rollback: Delete station?
-        # For now just fail.
         raise HTTPException(
-            status_code=500, detail=f"Failed to link station to project: {e}"
+            status_code=500, detail=f"Failed to link sensor to project: {e}"
         )
 
-    # Return response
-    return StationResponse(**created_station_dict, is_active=False, last_activity=None)
+    return {"status": "success", "message": "Sensor linked successfully"}
 
 
-@router.put("/{project_id}/things/{station_id_str}", response_model=StationResponse)
-def update_project_thing(
-    project_id: UUID,
-    station_id_str: str,
-    thing_in: StationUpdate,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(deps.get_current_user),
-    ts_service: TimeSeriesService = Depends(deps.get_time_series_service),
-) -> Any:
-    """Update a Thing."""
-    # Check Editor access
-    ProjectService._check_access(db, project_id, current_user, required_role="editor")
 
-    # Verify link
-    sensors = ProjectService.list_sensors(db, project_id, current_user)
-    if station_id_str not in sensors:
-        raise HTTPException(status_code=404, detail="Thing not found in project")
 
-    # Update (Partial support in Service)
-    # The service `update_station` is currently a stub that returns `get_station`.
-    # Real implementation would patch FROST.
-    # For now, we assume service might be updated or we just return current.
-    # The user asked for "Enable... updating".
-    # I should check if `update_station` in Service needs implementation.
-    # It says "# Not fully implemented for deep patch".
-    # I will proceed, but note limitation.
-
-    updated = ts_service.update_station(
-        station_id_str, thing_in.model_dump(exclude_unset=True)
-    )
-    if not updated:
-        raise HTTPException(status_code=404, detail="Station not found")
-
-    return StationResponse(**updated, is_active=False, last_activity=None)  # Re-calc?
 
 
 @router.delete("/{project_id}/things/{thing_id}")
-def delete_project_thing(
+def unlink_project_thing(
     project_id: UUID,
     thing_id: str,
-    delete_from_source: bool = Query(
-        False, description="If true, deletes from FROST Server too."
-    ),
     db: Session = Depends(get_db),
     current_user: dict = Depends(deps.get_current_user),
     ts_service: TimeSeriesService = Depends(deps.get_time_series_service),
 ) -> Any:
-    """Remove Thing from project. Optionally delete from FROST."""
+    """Remove Thing from project (Unlink only). Does NOT delete from Source."""
     # Check Editor access
     ProjectService._check_access(db, project_id, current_user, required_role="editor")
 
@@ -215,10 +168,7 @@ def delete_project_thing(
     # Remove link using canonical ID
     ProjectService.remove_sensor(db, project_id, canonical_id, current_user)
 
-    if delete_from_source:
-        ts_service.delete_station(canonical_id)
-
-    return {"status": "success"}
+    return {"status": "success", "message": "Sensor unlinked"}
 
 
 class SimpleDataPoint(BaseModel):
