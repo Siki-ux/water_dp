@@ -86,7 +86,7 @@ async def create_bulk_data_points(
 
 @router.get("/data-points", response_model=DataPointListResponse)
 async def get_data_points(
-    station_id: int = Query(..., description="Station ID"),
+    station_id: str = Query(..., description="Station ID"),
     start_time: Optional[str] = Query(None, description="Start time (ISO format)"),
     end_time: Optional[str] = Query(None, description="End time (ISO format)"),
     parameter: Optional[str] = Query(None, description="Filter by parameter"),
@@ -170,7 +170,7 @@ async def get_data_points(
 
 @router.get("/data-points/latest", response_model=List[WaterDataPointResponse])
 async def get_latest_data_points(
-    station_id: int = Query(..., description="Station ID"),
+    station_id: str = Query(..., description="Station ID"),
     parameter: Optional[str] = Query(None, description="Filter by parameter"),
     db: Session = Depends(get_db),
 ):
@@ -182,7 +182,7 @@ async def get_latest_data_points(
 
 @router.get("/stations/{station_id}/statistics", response_model=StationStatistics)
 async def get_station_statistics(
-    station_id: int,
+    station_id: str,
     start_time: Optional[str] = Query(None, description="Start time (ISO format)"),
     end_time: Optional[str] = Query(None, description="End time (ISO format)"),
     db: Session = Depends(get_db),

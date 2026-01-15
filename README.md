@@ -22,6 +22,10 @@ A reliable Python backend for handling requests between databases, GeoServer, ti
     - **Smart ID Resolution**: Access sensors via internal UUIDs or original string IDs (`STATION_123`).
     - **Auto-Provisioning**: Automatically creates Locations and Features of Interest during data import.
     - **Bulk Operations**: Efficiently import large historical datasets and delete recursively.
+- **Alerting System**:
+    - **Rule Management**: Define custom thresholds and conditions for parameters.
+    - **Monitoring**: Real-time or scheduled checks on incoming data.
+    - **History**: Full audit trail of triggered alerts.
 
 ## Architecture
 
@@ -143,6 +147,23 @@ erDiagram
         string id PK "Celery Task ID"
         uuid script_id FK
         string status
+        string result
+        string logs
+    }
+
+    ALERT_DEFINITIONS {
+        uuid id PK
+        uuid project_id FK
+        string name
+        string condition_type
+        float threshold
+    }
+
+    ALERTS {
+        uuid id PK
+        uuid definition_id FK
+        datetime alert_time
+        string status
     }
     
     PROJECT_SENSORS {
@@ -190,6 +211,13 @@ erDiagram
     %% App User Context
     PROJECTS ||--o{ DASHBOARDS : contains
     PROJECTS ||--o{ PROJECT_SENSORS : links_to
+    PROJECTS ||--o{ ALERT_DEFINITIONS : defines
+    
+    %% Computations
+    COMPUTATION_SCRIPTS ||--o{ COMPUTATION_JOBS : executes
+
+    %% Alerts
+    ALERT_DEFINITIONS ||--o{ ALERTS : triggers
     
     %% Logical Link: App -> TimeIO
     PROJECT_SENSORS }|..|| THINGS : "Refers to (by Name/Prop)"
@@ -511,87 +539,37 @@ poetry run alembic revision --autogenerate -m "Description of changes"
 poetry run alembic upgrade head
 ```
 
-## Roadmap: Dynamic Frontend Support
-To support a highly customizable frontend (dashboards, maps, sub-portals) with predictive capabilities, the current backend requires the following architectural additions:
+## Implemented Features (Gap Analysis Status)
 
-### Gap Analysis
+The following originally planned features have been **successfully implemented**:
 
+### 1. Computation & Prediction Engine
+-   **Infrastructure**: Fully operational Worker Queue (Celery + Redis).
+-   **Script Engine**: `ComputationScript` model allows uploading and versioning Python scripts.
+-   **Execution**: Python scripts run in isolated worker processes, with full support for:
+    -   Fetching data from TimeIO/DB.
+    -   Performing calculations (e.g., Flood Risk).
+    -   Returning results and logs to the UI.
+    -   **History**: Full execution history tracking (Status, Result, Logs).
 
-1.  **Computation & Prediction Engine (The "Complex Computation" Part)**
-    - **Missing**: Current analytics are limited to fast SQL aggregations (min/max/avg). There is no infrastructure for running heavy prediction models (AI/ML) or long-running simulations.
-    - **Why**: "Predictions on how water will behave" requires complex mathematics that cannot run inside a standard HTTP request.
-    - **Need**:
-        - **Job Queue** (e.g., Celery/Redis) for asynchronous processing.
-        - **Scheduler** for running regular predictions (e.g., "every night at 00:00").
-        - **Prediction Service** to interface with ML libraries (scikit-learn, etc.).
+### 2. Bulk Data Import
+-   **GeoJSON**: Efficient import for map layers (`POST /api/v1/bulk/import/geojson`).
+-   **Time Series**: High-performance CSV import for sensor data.
 
-2.  **Bulk Data Import (The "Efficient Loading" Part)**
-    - **Missing**: No API endpoints or utilities for bulk importing large datasets.
-    - **Why**: Initial setup, data migration, or historical data loading requires efficiently inserting thousands/millions of records.
-    - **Need**:
-        - **Bulk GeoJSON Import**: Load large geographic datasets into PostGIS/GeoServer.
-        - **Bulk Time-Series Import**: Efficiently insert millions of sensor readings into TimescaleDB.
-        - **CSV/Parquet Support**: Common data formats for hydrology data.
-        - **Background Processing**: Use job queue for large imports to avoid timeout.
+### 3. Alerting System
+-   **Rule Engine**: Define rules based on thresholds (GT/LT) or data availability.
+-   **Monitoring**: Check conditions against incoming data or schedule checks.
+-   **History**: Persist triggered alerts for audit and review.
 
-3.### Gap Analysis for Hydro_portal Frontend (Updated)
-    - **Spatial Analysis**: The `spatial_query` endpoint exists but requires further implementation for complex polygon intersections.
-    - **Project & Dashboard Management**:
-        - **Status**: Backend supports Project-based sharing. Frontend now includes Data Management tabs (Sensors vs Datasets).
-    - **User Registration**: Currently handled via Keycloak Admin Console. A public registration endpoint is planned.
-    - **Fixed Items**:
-        - **Bulk Data Import**: Now fully implemented for both GeoJSON and Time-Series CSVs.
-        - **Sensor Status**: Logic to determine status added to API.
-        - **Static Data Support**: Added "Dataset" type for virtual/imported data sources.
+### 4. Security & Architecture
+-   **Keycloak Integration**: Full JWT validation and Role-Based Access Control (RBAC).
+-   **TimeIO Integration**: Seamless `Frost -> TimescaleDB` data flow.
 
-### TODO
-- [x] **User Config Store**: Design DB schema and API for `UserDashboards` and `WidgetConfigs` (JSONB).
-- [x] **Computation Infrastructure**: Set up a Worker Queue (Celery) and Redis for background tasks.
-- [x] **Prediction Engine**: Implemented `ComputationScript` engine to run Python scripts (e.g., simulations/predictions) on Worker nodes.
-- [x] **Logical Grouping**: Add `Project` / `Group` tables to organize Resources (Layers, Sensors) into "Apps".
-- [x] **Security**: Implement FastAPI Middleware to validate Keycloak Tokens (Validation) and enforce scopes/roles.
-- [x] **Bulk Import**: Create endpoints and utilities for bulk data import (CSV, GeoJSON, Parquet) with background job processing.
+## Future Roadmap
 
-### Implementation Plan
-To achieve the above goals, we will implement the following:
-
-#### 1. Architecture: The "Worker" Service (Implemented)
-We decoupled heavy computations from the main API.
--   **Added container**: `worker` in `docker-compose.yml`.
--   **Technology**: [Celery](https://docs.celeryq.dev/) (Distributed Task Queue).
--   **Broker**: [Redis](https://redis.io/) (Already present in stack).
--   **Workflow**:
-    1.  User requests a "Flood Prediction" via API -> `POST /api/v1/jobs/predict`.
-    2.  API pushes a task to Redis Queue.
-    3.  Worker picks up the task, fetches data from TimeIO, runs the model, and writes results back to TimeIO.
-
-
-
-#### 2. Technology Stack Enhancements
--   **Job Queue**: `celery` + `redis`
--   **Machine Learning**: `scikit-learn` or `prophet` (inside the `worker` container).
--   **JSON Storage**: SQLAlchemy `JSONB` type (for flexible dashboard layouts).
-
-#### 3. Bulk Data Import Tools (Implemented)
-We created efficient tools for loading large datasets without blocking the API.
--   **API Endpoints**:
-    - `POST /api/v1/bulk/import/geojson` - Upload GeoJSON files for PostGIS/GeoServer
-    - `POST /api/v1/bulk/import/timeseries` - Upload CSV with sensor data to TimescaleDB
-    - `POST /api/v1/computations/run/{script}` - Trigger background scripts.
--   **Technologies**:
-    - `pandas` (already present) for CSV/Parquet parsing
-    - `geopandas` for GeoJSON processing and validation
-    - Celery for background processing (large files)
--   **Workflow**:
-    1. Upload file via API (file validation and size check)
-    2. Push job to Celery queue (returns job ID immediately)
-    3. Worker processes file in background
-    4. Client polls `/api/v1/bulk/tasks/{job_id}` for progress/completion
-
-### Fixes
-- [x] Use TimeIO to replace the custom time-series storage engine
-- [x] Use Keycloak for authentication properly
-- [x] Fix security problems with project
+- [ ] **Advanced Visualization**: WebGL-powered 3D rendering for flood simulations.
+- [ ] **Multi-Tenant Isolation**: strict data separation between Projects (if required).
+- [ ] **Public API Gateway**: Rate-limited public access to specific datasets.
 
 ## Contributing
 

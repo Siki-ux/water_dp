@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import List
 
 from celery.result import AsyncResult
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from pydantic import UUID4, BaseModel
 from sqlalchemy.orm import Session
 
@@ -216,6 +216,85 @@ def list_project_computations(
     return scripts
 
 
+class ComputationJobRead(BaseModel):
+    id: str
+    script_id: UUID4
+    user_id: str
+    status: str
+    start_time: str | None
+    end_time: str | None
+    result: str | None
+    error: str | None
+    logs: str | None
+    created_by: str | None
+
+    class ConfigDict:
+        from_attributes = True
+
+
+@router.get("/jobs/{script_id}", response_model=List[ComputationJobRead])
+def list_script_jobs(
+    script_id: UUID4,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(deps.get_current_user),
+):
+    """
+    List execution history for a script.
+    Syncs PENDING jobs from Celery before returning.
+    """
+    script = (
+        db.query(ComputationScript).filter(ComputationScript.id == script_id).first()
+    )
+    if not script:
+        raise HTTPException(status_code=404, detail="Script not found")
+
+    ProjectService._check_access(
+        db, script.project_id, current_user, required_role="viewer"
+    )
+
+    jobs = (
+        db.query(ComputationJob)
+        .filter(ComputationJob.script_id == script_id)
+        .order_by(ComputationJob.start_time.desc())
+        .limit(50)
+        .all()
+    )
+
+    # Sync PENDING jobs
+    import json
+
+    from app.core.celery_app import celery_app
+
+    dirty = False
+    for job in jobs:
+        if job.status in ["PENDING", "STARTED"]:
+            task_result = AsyncResult(job.id, app=celery_app)
+            if task_result.ready():
+                job.status = task_result.status
+                job.end_time = datetime.utcnow().isoformat()
+
+                if task_result.successful():
+                    res = task_result.result
+                    if isinstance(res, (dict, list)):
+                        job.result = json.dumps(res)
+                        job.logs = json.dumps(res, indent=2)
+                    else:
+                        job.result = str(res)
+                        job.logs = str(res)
+                else:
+                    job.error = str(task_result.result)
+                    job.logs = f"Error: {task_result.result}\nTraceback: {task_result.traceback}"
+
+                dirty = True
+
+    if dirty:
+        db.commit()
+        # Refresh all jobs to get updated state (though objects should be updated in session)
+        # No need to re-query as SQLAlchemy updates the objects in identity map
+
+    return jobs
+
+
 @router.get("/tasks/{task_id}")
 def get_computation_status(
     task_id: str,
@@ -224,7 +303,7 @@ def get_computation_status(
 ):
     """
     Get the status of a computation task.
-    Restricted to the user who started the job or superusers.
+    Syncs Celery result to DB if finished.
     """
     job = db.query(ComputationJob).filter(ComputationJob.id == task_id).first()
     if not job:
@@ -237,13 +316,121 @@ def get_computation_status(
     if not is_superuser and job.user_id != current_user.get("sub"):
         raise HTTPException(status_code=403, detail="Not authorized to view this job")
 
+    # If already finished in DB, return immediately
+    if job.status in ["SUCCESS", "FAILURE", "REVOKED"]:
+        return {
+            "task_id": task_id,
+            "status": job.status,
+            "result": job.result,
+            "error": job.error,
+            "logs": job.logs,
+        }
+
     from app.core.celery_app import celery_app
 
-    task_result = AsyncResult(task_id, app=celery_app)
+    print(f"DEBUG: Checking task {task_id}")
+    print(f"DEBUG: Backend: {celery_app.conf.result_backend}")
 
-    # Optionally update DB status if needed, but for now just return Celery status
+    task_result = AsyncResult(task_id, app=celery_app)
+    print(f"DEBUG: Celery Status: {task_result.status}, Ready: {task_result.ready()}")
+
+    # Check if ready and sync to DB
+    if task_result.ready():
+        import json
+
+        job.status = task_result.status
+        job.end_time = datetime.utcnow().isoformat()
+
+        if task_result.successful():
+            # For now, we store the whole result as JSON in 'result'
+            # And also as 'logs' just for visibility in the simple UI
+            res = task_result.result
+            if isinstance(res, (dict, list)):
+                job.result = json.dumps(res)
+                job.logs = json.dumps(res, indent=2)
+            else:
+                job.result = str(res)
+                job.logs = str(res)
+        else:
+            # Failure
+            job.error = str(task_result.result)  # Exception message
+            job.logs = (
+                f"Error: {task_result.result}\nTraceback: {task_result.traceback}"
+            )
+
+        db.commit()
+        db.refresh(job)
+
     return {
         "task_id": task_id,
         "status": task_result.status,
-        "result": task_result.result if task_result.ready() else None,
+        "result": job.result,
+        "logs": job.logs,
     }
+
+
+@router.get("/content/{script_id}")
+def get_script_content(
+    script_id: UUID4,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(deps.get_current_user),
+):
+    """
+    Get the raw content of a computation script.
+    """
+    script = (
+        db.query(ComputationScript).filter(ComputationScript.id == script_id).first()
+    )
+    if not script:
+        raise HTTPException(status_code=404, detail="Script not found")
+
+    ProjectService._check_access(
+        db, script.project_id, current_user, required_role="viewer"
+    )
+
+    script_path = os.path.join(COMPUTATIONS_DIR, script.filename)
+    if not os.path.exists(script_path):
+        raise HTTPException(status_code=404, detail="Script file missing on server")
+
+    with open(script_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    return {"content": content}
+
+
+@router.put("/content/{script_id}")
+def update_script_content(
+    script_id: UUID4,
+    content_wrapper: dict = Body(..., embed=True),  # Expect {"content": "..."}
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(deps.get_current_user),
+):
+    """
+    Update the content of a computation script.
+    Requires 'editor' access.
+    """
+    script = (
+        db.query(ComputationScript).filter(ComputationScript.id == script_id).first()
+    )
+    if not script:
+        raise HTTPException(status_code=404, detail="Script not found")
+
+    ProjectService._check_access(
+        db, script.project_id, current_user, required_role="editor"
+    )
+
+    new_content = content_wrapper.get("content", "")
+
+    # 1. Validate Security
+    validate_script_security(new_content)
+
+    # 2. Validate Size (approx)
+    if len(new_content.encode("utf-8")) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="File size exceeds 1MB limit")
+
+    # 3. Save
+    script_path = os.path.join(COMPUTATIONS_DIR, script.filename)
+    with open(script_path, "w", encoding="utf-8") as f:
+        f.write(new_content)
+
+    return {"status": "updated", "id": script_id}

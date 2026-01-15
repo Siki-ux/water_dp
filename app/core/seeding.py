@@ -234,6 +234,63 @@ def seed_data(db: Session) -> None:
                     logger.error(f"Failed to load CZ Rep GeoJSON: {e}")
             db.commit()
 
+        # Seed Czech Regions Praha Layer
+        if (
+            not db.query(GeoLayer)
+            .filter(GeoLayer.layer_name == "czech_regions_praha")
+            .first()
+        ):
+            logger.info("Seeding Czech Regions Praha layer...")
+            cr_praha_layer = GeoLayer(
+                layer_name="czech_regions_praha",
+                title="Czech Regions Praha",
+                description="Prague region subdivisions.",
+                store_name="water_data_store",
+                layer_type="vector",
+                geometry_type="polygon",
+                is_published="true",
+                is_public="true",
+            )
+            db.add(cr_praha_layer)
+            db.flush()
+
+            data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+            praha_path = os.path.join(data_dir, "czech_regions_praha.geojson")
+
+            if os.path.exists(praha_path):
+                try:
+                    with open(praha_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    fs = data.get("features", [])
+                    if not fs and data.get("type") == "Feature":
+                        fs = [data]
+                    for idx, fd in enumerate(fs):
+                        props = fd.get("properties", {})
+                        # Try to find a meaningful ID, fallback to sequential
+                        fid = (
+                            props.get("id")
+                            or props.get("localId")
+                            or fd.get("id")
+                            or f"praha_{idx}"
+                        )
+                        gs = shape(fd["geometry"])
+                        wkt = from_shape(gs, srid=4326)
+                        feat = GeoFeature(
+                            layer_id="czech_regions_praha",
+                            feature_id=fid,
+                            feature_type="region",
+                            geometry=wkt,
+                            properties=props,
+                            is_active="true",
+                        )
+                        db.add(feat)
+                    logger.info("Successfully loaded Czech Regions Praha data.")
+                except Exception as e:
+                    logger.error(f"Failed to load Czech Regions Praha GeoJSON: {e}")
+            else:
+                logger.warning(f"File not found: {praha_path}")
+            db.commit()
+
         # -------------------------------------------------------------------------
         # PART 2: Seed TimeIO (FROST) - Always Run Check
         # -------------------------------------------------------------------------
@@ -499,6 +556,23 @@ def seed_data(db: Session) -> None:
                 logger.info(
                     f"Successfully published layer {layer_name_cz} to GeoServer"
                 )
+
+                # Publish SQL View for Czech Regions Praha
+                layer_name_praha = "czech_regions_praha"
+                sql_praha = (
+                    f"SELECT * FROM geo_features WHERE layer_id = '{layer_name_praha}'"
+                )
+
+                gs_service.publish_sql_view(
+                    layer_name=layer_name_praha,
+                    store_name=store_name,
+                    sql=sql_praha,
+                    title="Czech Regions Praha",
+                    workspace=workspace_name,
+                )
+                logger.info(
+                    f"Successfully published layer {layer_name_praha} to GeoServer"
+                )
             else:
                 logger.warning("Could not connect to GeoServer. Skipping publication.")
 
@@ -687,7 +761,105 @@ def seed_data(db: Session) -> None:
         # -------------------------------------------------------------------------
         logger.info("[SEEDING] Starting Part 4: Advanced Scenarios & Simulator")
         seed_advanced_logic(db)
-        seed_simulator_entities()
+        seed_advanced_logic(db)
+        seed_simulator_entities()  # Ensure simulator entities are seeded if needed
+
+        # -------------------------------------------------------------------------
+        # PART 5: Seeding Inactive Sensors and Datasets
+        # -------------------------------------------------------------------------
+        logger.info("[SEEDING] Starting Part 5: Inactive Sensors & Datasets")
+
+        # 1. Seed Inactive Sensor
+        inactive_sensor_id = ensure_frost_entity(
+            "Things",
+            {
+                "name": "Inactive Station",
+                "description": "Legacy station, currently inactive.",
+                "properties": {
+                    "station_id": "STATION_INACTIVE_1",
+                    "region": "Region_1",
+                    "type": "river",
+                    "status": "inactive",
+                },
+                "Locations": [
+                    {
+                        "name": "Loc Inactive",
+                        "description": "Location of Inactive Station",
+                        "encodingType": "application/vnd.geo+json",
+                        "location": {
+                            "type": "Point",
+                            "coordinates": [14.5, 50.0],  # Arbitrary point
+                        },
+                    }
+                ],
+            },
+        )
+        if inactive_sensor_id:
+            # Link to project so it appears in list (but as inactive)
+            try:
+                with db.begin_nested():
+                    exists = db.execute(
+                        project_sensors.select().where(
+                            and_(
+                                project_sensors.c.project_id == project.id,
+                                project_sensors.c.sensor_id == str(inactive_sensor_id),
+                            )
+                        )
+                    ).first()
+                    if not exists:
+                        db.execute(
+                            project_sensors.insert().values(
+                                project_id=project.id, sensor_id=str(inactive_sensor_id)
+                            )
+                        )
+                        logger.info(
+                            f"Linked Inactive Sensor {inactive_sensor_id} to project."
+                        )
+                db.commit()
+            except Exception as e:
+                logger.warning(f"Failed to link inactive sensor: {e}")
+
+        # 2. Seed Non-Sensor Dataset
+        # This represents a dataset (e.g., CSV upload) that isn't a physical sensor
+        dataset_id = ensure_frost_entity(
+            "Things",
+            {
+                "name": "Historic Flood Data 2010",
+                "description": "Imported dataset of 2010 flood levels.",
+                "properties": {
+                    "station_id": "DATASET_FLOOD_2010",  # ID scheme for datasets
+                    "type": "dataset",  # Key discriminator
+                    "status": "static",
+                    "source": "csv_import",
+                },
+            },
+        )
+        if dataset_id:
+            logger.info(
+                f"Seeded Dataset Thing: {dataset_id} (Historic Flood Data 2010)"
+            )
+            # We optionally LINK it to project if we want it visible in "Datasets" tab for that project
+            # Assuming 'project_sensors' is generic for 'project_things'
+            try:
+                with db.begin_nested():
+                    exists = db.execute(
+                        project_sensors.select().where(
+                            and_(
+                                project_sensors.c.project_id == project.id,
+                                project_sensors.c.sensor_id == str(dataset_id),
+                            )
+                        )
+                    ).first()
+                    if not exists:
+                        db.execute(
+                            project_sensors.insert().values(
+                                project_id=project.id, sensor_id=str(dataset_id)
+                            )
+                        )
+                        logger.info(f"Linked Dataset {dataset_id} to project.")
+                db.commit()
+            except Exception as e:
+                logger.warning(f"Failed to link dataset: {e}")
 
         logger.info("Demo Project, Dashboard, and Advanced Scenarios seeded/checked.")
 

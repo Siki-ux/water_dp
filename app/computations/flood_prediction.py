@@ -1,29 +1,28 @@
-import random
-import time
+"""
+Flood Prediction Model (Demo)
+This script simulates a flood risk calculation based on water level.
+"""
 
 
-def run(params: dict):
+def run(params):
     """
-    Example computation script that simulates a flood prediction model.
+    Main entry point for computation.
+    params: dict containing input parameters
     """
-    print(f"Starting flood prediction with params: {params}")
+    water_level = params.get("water_level", 0.0)
 
-    # Simulate heavy computation
-    time.sleep(5)
-
-    # Simulate fetching data (mock)
-    location_id = params.get("location_id", 1)
-
-    # Dummy calculation
-    risk_score = random.random() * 100
-    is_flood_likely = risk_score > 80
+    # Simulate processing
+    risk_score = 0.0
+    if water_level > 150:
+        risk_score = (water_level - 150) * 2.0
 
     result = {
-        "location_id": location_id,
-        "risk_score": round(risk_score, 2),
-        "prediction": "FLOOD" if is_flood_likely else "NORMAL",
-        "timestamp": time.time(),
+        "status": "success",
+        "location_id": params.get("location_id"),
+        "input_level": water_level,
+        "risk_score": min(risk_score, 100),
+        "prediction": "FLOOD" if risk_score > 50 else "NORMAL",
+        "alert_triggered": risk_score > 50,
     }
 
-    print(f"Computation finished: {result}")
     return result
