@@ -366,3 +366,34 @@ async def get_wfs_url(
     except Exception as e:
         logger.error(f"Failed to generate WFS URL: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/layers/{layer_name}/sensors")
+async def get_sensors_in_layer(
+    layer_name: str,
+    db: Session = Depends(get_db),
+):
+    """Get sensors (Things) within the specified layer's geometry."""
+    try:
+        db_service = DatabaseService(db)
+        sensors = db_service.get_sensors_in_layer(layer_name)
+        return sensors
+    except Exception as e:
+        logger.error(f"Failed to get sensors in layer {layer_name}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/layers/{layer_name}/bbox")
+async def get_layer_bbox(
+    layer_name: str,
+    db: Session = Depends(get_db),
+):
+    """Get the bounding box of a layer."""
+    try:
+        db_service = DatabaseService(db)
+        bbox = db_service.get_layer_bbox(layer_name)
+        if not bbox:
+            raise HTTPException(status_code=404, detail="BBox not found or layer empty")
+        return {"bbox": bbox}
+    except Exception as e:
+        logger.error(f"Failed to get bbox for layer {layer_name}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

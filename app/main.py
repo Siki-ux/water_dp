@@ -126,14 +126,16 @@ async def log_requests(request: Request, call_next):
     start_time = time.time()
 
     # Log request
-    logger.info(f"Request: {request.method} {request.url}")
+    if request.url.path != "/health":
+        logger.info(f"Request: {request.method} {request.url}")
 
     # Process request
     response = await call_next(request)
 
     # Log response
     process_time = time.time() - start_time
-    logger.info(f"Response: {response.status_code} - {process_time:.3f}s")
+    if request.url.path != "/health":
+        logger.info(f"Response: {response.status_code} - {process_time:.3f}s")
 
     return response
 

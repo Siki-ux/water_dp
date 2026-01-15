@@ -61,6 +61,7 @@ services:
       - GEOSERVER_ADMIN_PASSWORD=${GEOSERVER_ADMIN_PASSWORD:-geoserver}
       - GEOSERVER_ADMIN_USER=${GEOSERVER_ADMIN_USER:-admin}
       - GEOSERVER_DATA_DIR=/opt/geoserver/data_dir
+      - JAVA_OPTS=-Xms512m -Xmx1024m
     ports:
       - "8080:8080"
     volumes:
@@ -110,7 +111,7 @@ services:
     ports:
       - "8000:8000"
     healthcheck:
-      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/docs')" ]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -184,6 +185,8 @@ services:
     container_name: timeio_keycloak
     env_file:
       - timeio.env
+    environment:
+      - JAVA_OPTS=-Xms256m -Xmx768m
     volumes:
       - ./keycloak/import:/opt/keycloak/data/import
     command: start-dev --import-realm --http-port 8080
@@ -211,6 +214,7 @@ services:
     ports:
       - "8083:8080"
     environment:
+      - JAVA_OPTS=-Xms256m -Xmx768m
       - serviceRootUrl=http://localhost:8083/FROST-Server
       - plugins_multiDatastream_enable=true
       - http_cors_enable=true
@@ -322,27 +326,26 @@ services:
       - ./nginx_proxy_api.conf:/etc/nginx/conf.d/default.conf
     networks:
       - water_dp_network
-
   # Visualization (Grafana)
-  visualization:
-    image: grafana/grafana:11.6.1
-    container_name: timeio_grafana
-    env_file:
-      - timeio.env
-    ports:
-      - "3000:3000"
-    environment:
-      - GF_SECURITY_ADMIN_USER=${VISUALIZATION_USER}
-      - GF_SECURITY_ADMIN_PASSWORD=${VISUALIZATION_PASSWORD}
-      - GF_SERVER_ROOT_URL=${VISUALIZATION_PROXY_URL}
-      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - water_dp_network
-    volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning
+  # visualization:
+  #   image: grafana/grafana:11.6.1
+  #   container_name: timeio_grafana
+  #   env_file:
+  #     - timeio.env
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - GF_SECURITY_ADMIN_USER=${VISUALIZATION_USER}
+  #     - GF_SECURITY_ADMIN_PASSWORD=${VISUALIZATION_PASSWORD}
+  #     - GF_SERVER_ROOT_URL=${VISUALIZATION_PROXY_URL}
+  #     - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   networks:
+  #     - water_dp_network
+  #   volumes:
+  #     - ./grafana/provisioning:/etc/grafana/provisioning
 
 volumes:
   postgres_data_ts:

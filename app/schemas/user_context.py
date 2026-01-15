@@ -89,3 +89,26 @@ class ProjectResponse(ProjectBase):
 class ProjectSensorResponse(BaseModel):
     project_id: UUID
     sensor_id: str
+
+
+class SensorLocation(BaseModel):
+    lat: float
+    lng: float
+
+
+class SensorDataPoint(BaseModel):
+    parameter: str
+    value: float | str | None
+    unit: str
+    timestamp: datetime
+
+
+class SensorDetail(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    location: SensorLocation
+    status: str
+    last_update: Optional[datetime] = None
+    latest_data: List[SensorDataPoint] = []
+    station_type: str = "unknown"

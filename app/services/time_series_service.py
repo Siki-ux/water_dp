@@ -86,6 +86,7 @@ class TimeSeriesService:
 
         return {
             "id": int_id,
+            "frost_id": iot_id, # Keep original type (int/str) for OData
             "station_id": props.get("station_id", str(iot_id)),
             "name": thing.get("name"),
             "description": thing.get("description"),
@@ -176,12 +177,21 @@ class TimeSeriesService:
             raise TimeSeriesException(f"Failed to fetch station details: {e}")
 
     def get_datastreams_for_station(
-        self, station_id: int, parameter: Optional[str] = None
+        self, station_id: int | str, parameter: Optional[str] = None
     ) -> List[Dict]:
         """Get all datastreams for a station (Thing)."""
         # Use Navigation Path: Things({id})/Datastreams
         # This is more robust than filtering by Thing/id
-        url = f"{self._get_frost_url()}/Things({station_id})/Datastreams"
+
+        # Handle OData quoting for String IDs
+        # If it's a string of digits, assume it's an Integer ID (unquoted)
+        if isinstance(station_id, str) and not station_id.isdigit():
+            safe_id = self._escape_odata_string(station_id)
+            url_part = f"Things('{safe_id}')"
+        else:
+            url_part = f"Things({station_id})"
+            
+        url = f"{self._get_frost_url()}/{url_part}/Datastreams"
 
         params = {"$expand": "ObservedProperty,Thing/Locations"}
 
@@ -691,12 +701,22 @@ class TimeSeriesService:
             raise TimeSeriesException(f"Failed to create data point: {e}")
 
     def get_latest_data(
-        self, station_id: int, parameter: Optional[str] = None
+        self, station_id: int | str, parameter: Optional[str] = None
     ) -> List[Dict]:
-        """Get latest data points for a station (Thing)."""
+        """Get latest data points for a station (Thing). station_id should be the FROST @iot.id (string or int)."""
 
         # 1. Find Datastreams via Navigation
-        url = f"{self._get_frost_url()}/Things({station_id})/Datastreams"
+        # Handle OData quoting for String IDs
+        # If it's a string of digits, assume it's an Integer ID (unquoted)
+        if isinstance(station_id, str) and not station_id.isdigit():
+            # Escape valid OData string if needed, but simple quoting is primary requirement
+            # Assuming ID doesn't contain single quotes for now or use escape helper
+            safe_id = self._escape_odata_string(station_id)
+            url_part = f"Things('{safe_id}')"
+        else:
+            url_part = f"Things({station_id})"
+            
+        url = f"{self._get_frost_url()}/{url_part}/Datastreams"
 
         params = {"$expand": "ObservedProperty"}
         if parameter:
@@ -721,7 +741,13 @@ class TimeSeriesService:
                 uom = ds.get("unitOfMeasurement", {}).get("name", "unknown")
 
                 # Get latest observation
-                obs_url = f"{self._get_frost_url()}/Datastreams({ds_id})/Observations?$top=1&$orderby=phenomenonTime desc"
+                # Get latest observation
+                if isinstance(ds_id, str) and not str(ds_id).isdigit():
+                    quot_ds_id = f"'{ds_id}'"
+                else:
+                    quot_ds_id = ds_id
+                    
+                obs_url = f"{self._get_frost_url()}/Datastreams({quot_ds_id})/Observations?$top=1&$orderby=phenomenonTime desc"
                 try:
                     obs_resp = requests.get(obs_url, timeout=self._get_timeout())
                     obs_resp.raise_for_status()
@@ -743,12 +769,19 @@ class TimeSeriesService:
                         except ValueError:
                             t = datetime.now()  # Fallback
 
+                        # Normalize parameter (slugify)
+                        param_slug = op_name.lower().replace(" ", "_").replace("-", "_")
+                        if param_slug == "water_temperature":
+                            param_slug = "temperature"
+                        elif param_slug == "level":
+                            param_slug = "water_level"
+
                         results.append(
                             {
                                 "id": obs.get("@iot.id"),
                                 "station_id": station_id,
                                 "timestamp": t,
-                                "parameter": op_name,
+                                "parameter": param_slug,
                                 "value": obs.get("result"),
                                 "unit": uom,
                                 "quality_flag": obs.get("parameters", {}).get(
