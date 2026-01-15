@@ -1,3 +1,4 @@
+import logging
 from typing import Any, List
 from uuid import UUID
 
@@ -15,16 +16,16 @@ from app.schemas.user_context import (
     ProjectMemberUpdate,
     ProjectResponse,
     ProjectSensorResponse,
-    ProjectSensorResponse,
     ProjectUpdate,
+    SensorDataPoint,
     SensorDetail,
     SensorLocation,
-    SensorDataPoint
 )
 from app.services.dashboard_service import DashboardService
 from app.services.project_service import ProjectService
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # --- Projects ---
 
@@ -162,13 +163,14 @@ def list_project_sensors(
     """List sensors in project with details."""
     # 1. Get List of IDs
     sensor_ids = ProjectService.list_sensors(db, project_id, current_user)
-    
+
     # 2. Fetch Details from TimeSeriesService
     from app.services.time_series_service import TimeSeriesService
+
     ts_service = TimeSeriesService(db)
-    
+
     results = []
-    
+
     # Optimization: Multi-threaded or Batch fetch in future. Loop for now.
     for sid in sensor_ids:
         try:
@@ -176,50 +178,57 @@ def list_project_sensors(
             station = ts_service.get_station(sid)
             if not station:
                 continue
-                
+
             # Get Latest Data
             # Use 'frost_id' (original string) if available, falling back to 'id' (hashed int)
-            frost_id = station.get('frost_id') or station.get('id')
+            frost_id = station.get("frost_id") or station.get("id")
             latest_data_raw = ts_service.get_latest_data(frost_id)
-            
+
             # Form Response
             loc = SensorLocation(
-                lat=station.get('latitude') or 0.0,
-                lng=station.get('longitude') or 0.0
+                lat=station.get("latitude") or 0.0, lng=station.get("longitude") or 0.0
             )
 
             # Map latest data
             data_points = []
             last_timestamp = None
-            
+
             for d in latest_data_raw:
                 dp = SensorDataPoint(
-                    parameter=d.get('parameter', 'unknown'),
-                    value=d.get('value'),
-                    unit=d.get('unit', ''),
-                    timestamp=d.get('timestamp')
+                    parameter=d.get("parameter", "unknown"),
+                    value=d.get("value"),
+                    unit=d.get("unit", ""),
+                    timestamp=d.get("timestamp"),
                 )
                 data_points.append(dp)
-                
+
                 # Track most recent update
-                if not last_timestamp or (dp.timestamp and dp.timestamp > last_timestamp):
+                if not last_timestamp or (
+                    dp.timestamp and dp.timestamp > last_timestamp
+                ):
                     last_timestamp = dp.timestamp
 
-            results.append(SensorDetail(
-                id=str(station.get('id')), # Return the internal Integer ID (as string "1")
-                name=station.get('name') or "Unknown Sensor",
-                description=station.get('description'),
-                location=loc,
-                status=station.get('status', 'active'), # Default to active if unknown
-                last_update=last_timestamp,
-                latest_data=data_points,
-                station_type=station.get('station_type', 'unknown')
-            ))
+            results.append(
+                SensorDetail(
+                    id=str(
+                        station.get("id")
+                    ),  # Return the internal Integer ID (as string "1")
+                    name=station.get("name") or "Unknown Sensor",
+                    description=station.get("description"),
+                    location=loc,
+                    status=station.get(
+                        "status", "active"
+                    ),  # Default to active if unknown
+                    last_update=last_timestamp,
+                    latest_data=data_points,
+                    station_type=station.get("station_type", "unknown"),
+                )
+            )
 
         except Exception as e:
             logger.warning(f"Failed to fetch details for sensor {sid}: {e}")
             continue
-            
+
     return results
 
 

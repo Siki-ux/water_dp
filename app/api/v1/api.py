@@ -5,6 +5,7 @@ API v1 router configuration.
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    alerts,
     auth,
     bulk,
     computations,
@@ -15,7 +16,6 @@ from app.api.v1.endpoints import (
     projects,
     time_series,
     water_data,
-    alerts,
 )
 
 api_router = APIRouter()

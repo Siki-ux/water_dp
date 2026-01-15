@@ -199,7 +199,7 @@ class TestTimeSeriesServiceCoverage:
             results = service.get_latest_data(station_id=50)
 
             assert len(results) == 1
-            assert results[0]["parameter"] == "Temp"
+            assert results[0]["parameter"] == "temp"
             assert results[0]["value"] == 25.0
             assert mock_get.call_count == 3
 

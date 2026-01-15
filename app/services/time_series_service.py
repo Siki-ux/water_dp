@@ -86,7 +86,7 @@ class TimeSeriesService:
 
         return {
             "id": int_id,
-            "frost_id": iot_id, # Keep original type (int/str) for OData
+            "frost_id": iot_id,  # Keep original type (int/str) for OData
             "station_id": props.get("station_id", str(iot_id)),
             "name": thing.get("name"),
             "description": thing.get("description"),
@@ -190,7 +190,7 @@ class TimeSeriesService:
             url_part = f"Things('{safe_id}')"
         else:
             url_part = f"Things({station_id})"
-            
+
         url = f"{self._get_frost_url()}/{url_part}/Datastreams"
 
         params = {"$expand": "ObservedProperty,Thing/Locations"}
@@ -715,7 +715,7 @@ class TimeSeriesService:
             url_part = f"Things('{safe_id}')"
         else:
             url_part = f"Things({station_id})"
-            
+
         url = f"{self._get_frost_url()}/{url_part}/Datastreams"
 
         params = {"$expand": "ObservedProperty"}
@@ -746,7 +746,7 @@ class TimeSeriesService:
                     quot_ds_id = f"'{ds_id}'"
                 else:
                     quot_ds_id = ds_id
-                    
+
                 obs_url = f"{self._get_frost_url()}/Datastreams({quot_ds_id})/Observations?$top=1&$orderby=phenomenonTime desc"
                 try:
                     obs_resp = requests.get(obs_url, timeout=self._get_timeout())

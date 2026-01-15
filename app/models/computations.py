@@ -38,9 +38,9 @@ class ComputationJob(Base, BaseModel):
     user_id = Column(String, nullable=False)  # User who started it
     status = Column(String, nullable=False, default="PENDING")
     start_time = Column(String, nullable=True)  # ISO format
-    end_time = Column(String, nullable=True)    # ISO format
-    result = Column(String, nullable=True)      # JSON string
-    error = Column(String, nullable=True)       # Error message/traceback
-    logs = Column(String, nullable=True)        # Console output
+    end_time = Column(String, nullable=True)  # ISO format
+    result = Column(String, nullable=True)  # JSON string
+    error = Column(String, nullable=True)  # Error message/traceback
+    logs = Column(String, nullable=True)  # Console output
 
     script = relationship("ComputationScript", backref="jobs")

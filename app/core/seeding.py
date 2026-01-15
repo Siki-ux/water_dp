@@ -182,7 +182,6 @@ def seed_data(db: Session) -> None:
                         f"Could not parse geometry for feature {f.feature_id}: {e}"
                     )
 
-
         # Seed Czech Republic Layer (Independent check)
         if (
             not db.query(GeoLayer)
@@ -268,7 +267,12 @@ def seed_data(db: Session) -> None:
                     for idx, fd in enumerate(fs):
                         props = fd.get("properties", {})
                         # Try to find a meaningful ID, fallback to sequential
-                        fid = props.get("id") or props.get("localId") or fd.get("id") or f"praha_{idx}"
+                        fid = (
+                            props.get("id")
+                            or props.get("localId")
+                            or fd.get("id")
+                            or f"praha_{idx}"
+                        )
                         gs = shape(fd["geometry"])
                         wkt = from_shape(gs, srid=4326)
                         feat = GeoFeature(
@@ -764,7 +768,7 @@ def seed_data(db: Session) -> None:
         # PART 5: Seeding Inactive Sensors and Datasets
         # -------------------------------------------------------------------------
         logger.info("[SEEDING] Starting Part 5: Inactive Sensors & Datasets")
-        
+
         # 1. Seed Inactive Sensor
         inactive_sensor_id = ensure_frost_entity(
             "Things",
@@ -775,7 +779,7 @@ def seed_data(db: Session) -> None:
                     "station_id": "STATION_INACTIVE_1",
                     "region": "Region_1",
                     "type": "river",
-                    "status": "inactive"
+                    "status": "inactive",
                 },
                 "Locations": [
                     {
@@ -784,35 +788,36 @@ def seed_data(db: Session) -> None:
                         "encodingType": "application/vnd.geo+json",
                         "location": {
                             "type": "Point",
-                            "coordinates": [14.5, 50.0]  # Arbitrary point
-                        }
+                            "coordinates": [14.5, 50.0],  # Arbitrary point
+                        },
                     }
-                ]
-            }
+                ],
+            },
         )
         if inactive_sensor_id:
-             # Link to project so it appears in list (but as inactive)
-             try:
-                 with db.begin_nested():
-                     exists = db.execute(
-                         project_sensors.select().where(
-                             and_(
-                                 project_sensors.c.project_id == project.id,
-                                 project_sensors.c.sensor_id == str(inactive_sensor_id)
-                             )
-                         )
-                     ).first()
-                     if not exists:
-                         db.execute(
-                             project_sensors.insert().values(
-                                 project_id=project.id, 
-                                 sensor_id=str(inactive_sensor_id)
-                             )
-                         )
-                         logger.info(f"Linked Inactive Sensor {inactive_sensor_id} to project.")
-                 db.commit()
-             except Exception as e:
-                 logger.warning(f"Failed to link inactive sensor: {e}")
+            # Link to project so it appears in list (but as inactive)
+            try:
+                with db.begin_nested():
+                    exists = db.execute(
+                        project_sensors.select().where(
+                            and_(
+                                project_sensors.c.project_id == project.id,
+                                project_sensors.c.sensor_id == str(inactive_sensor_id),
+                            )
+                        )
+                    ).first()
+                    if not exists:
+                        db.execute(
+                            project_sensors.insert().values(
+                                project_id=project.id, sensor_id=str(inactive_sensor_id)
+                            )
+                        )
+                        logger.info(
+                            f"Linked Inactive Sensor {inactive_sensor_id} to project."
+                        )
+                db.commit()
+            except Exception as e:
+                logger.warning(f"Failed to link inactive sensor: {e}")
 
         # 2. Seed Non-Sensor Dataset
         # This represents a dataset (e.g., CSV upload) that isn't a physical sensor
@@ -822,39 +827,39 @@ def seed_data(db: Session) -> None:
                 "name": "Historic Flood Data 2010",
                 "description": "Imported dataset of 2010 flood levels.",
                 "properties": {
-                    "station_id": "DATASET_FLOOD_2010", # ID scheme for datasets
-                    "type": "dataset", # Key discriminator
+                    "station_id": "DATASET_FLOOD_2010",  # ID scheme for datasets
+                    "type": "dataset",  # Key discriminator
                     "status": "static",
-                    "source": "csv_import"
-                }
-            }
+                    "source": "csv_import",
+                },
+            },
         )
         if dataset_id:
-            logger.info(f"Seeded Dataset Thing: {dataset_id} (Historic Flood Data 2010)")
+            logger.info(
+                f"Seeded Dataset Thing: {dataset_id} (Historic Flood Data 2010)"
+            )
             # We optionally LINK it to project if we want it visible in "Datasets" tab for that project
             # Assuming 'project_sensors' is generic for 'project_things'
             try:
-                 with db.begin_nested():
-                     exists = db.execute(
-                         project_sensors.select().where(
-                             and_(
-                                 project_sensors.c.project_id == project.id,
-                                 project_sensors.c.sensor_id == str(dataset_id)
-                             )
-                         )
-                     ).first()
-                     if not exists:
-                         db.execute(
-                             project_sensors.insert().values(
-                                 project_id=project.id, 
-                                 sensor_id=str(dataset_id)
-                             )
-                         )
-                         logger.info(f"Linked Dataset {dataset_id} to project.")
-                 db.commit()
+                with db.begin_nested():
+                    exists = db.execute(
+                        project_sensors.select().where(
+                            and_(
+                                project_sensors.c.project_id == project.id,
+                                project_sensors.c.sensor_id == str(dataset_id),
+                            )
+                        )
+                    ).first()
+                    if not exists:
+                        db.execute(
+                            project_sensors.insert().values(
+                                project_id=project.id, sensor_id=str(dataset_id)
+                            )
+                        )
+                        logger.info(f"Linked Dataset {dataset_id} to project.")
+                db.commit()
             except Exception as e:
-                 logger.warning(f"Failed to link dataset: {e}")
-
+                logger.warning(f"Failed to link dataset: {e}")
 
         logger.info("Demo Project, Dashboard, and Advanced Scenarios seeded/checked.")
 

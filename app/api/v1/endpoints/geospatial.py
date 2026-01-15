@@ -367,6 +367,7 @@ async def get_wfs_url(
         logger.error(f"Failed to generate WFS URL: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/layers/{layer_name}/sensors")
 async def get_sensors_in_layer(
     layer_name: str,

@@ -216,7 +216,6 @@ def list_project_computations(
     return scripts
 
 
-
 class ComputationJobRead(BaseModel):
     id: str
     script_id: UUID4
@@ -260,11 +259,12 @@ def list_script_jobs(
         .limit(50)
         .all()
     )
-    
+
     # Sync PENDING jobs
-    from app.core.celery_app import celery_app
     import json
-    
+
+    from app.core.celery_app import celery_app
+
     dirty = False
     for job in jobs:
         if job.status in ["PENDING", "STARTED"]:
@@ -272,7 +272,7 @@ def list_script_jobs(
             if task_result.ready():
                 job.status = task_result.status
                 job.end_time = datetime.utcnow().isoformat()
-                
+
                 if task_result.successful():
                     res = task_result.result
                     if isinstance(res, (dict, list)):
@@ -284,14 +284,14 @@ def list_script_jobs(
                 else:
                     job.error = str(task_result.result)
                     job.logs = f"Error: {task_result.result}\nTraceback: {task_result.traceback}"
-                
+
                 dirty = True
-    
+
     if dirty:
         db.commit()
         # Refresh all jobs to get updated state (though objects should be updated in session)
         # No need to re-query as SQLAlchemy updates the objects in identity map
-    
+
     return jobs
 
 
@@ -318,41 +318,45 @@ def get_computation_status(
 
     # If already finished in DB, return immediately
     if job.status in ["SUCCESS", "FAILURE", "REVOKED"]:
-         return {
+        return {
             "task_id": task_id,
             "status": job.status,
             "result": job.result,
             "error": job.error,
-            "logs": job.logs
+            "logs": job.logs,
         }
 
     from app.core.celery_app import celery_app
+
     print(f"DEBUG: Checking task {task_id}")
     print(f"DEBUG: Backend: {celery_app.conf.result_backend}")
-    
+
     task_result = AsyncResult(task_id, app=celery_app)
     print(f"DEBUG: Celery Status: {task_result.status}, Ready: {task_result.ready()}")
-    
+
     # Check if ready and sync to DB
     if task_result.ready():
         import json
+
         job.status = task_result.status
         job.end_time = datetime.utcnow().isoformat()
-        
+
         if task_result.successful():
             # For now, we store the whole result as JSON in 'result'
             # And also as 'logs' just for visibility in the simple UI
             res = task_result.result
             if isinstance(res, (dict, list)):
                 job.result = json.dumps(res)
-                job.logs = json.dumps(res, indent=2) 
+                job.logs = json.dumps(res, indent=2)
             else:
                 job.result = str(res)
                 job.logs = str(res)
         else:
             # Failure
-            job.error = str(task_result.result) # Exception message
-            job.logs = f"Error: {task_result.result}\nTraceback: {task_result.traceback}"
+            job.error = str(task_result.result)  # Exception message
+            job.logs = (
+                f"Error: {task_result.result}\nTraceback: {task_result.traceback}"
+            )
 
         db.commit()
         db.refresh(job)
@@ -361,9 +365,8 @@ def get_computation_status(
         "task_id": task_id,
         "status": task_result.status,
         "result": job.result,
-        "logs": job.logs
+        "logs": job.logs,
     }
-
 
 
 @router.get("/content/{script_id}")
@@ -417,13 +420,13 @@ def update_script_content(
     )
 
     new_content = content_wrapper.get("content", "")
-    
+
     # 1. Validate Security
     validate_script_security(new_content)
-    
+
     # 2. Validate Size (approx)
-    if len(new_content.encode('utf-8')) > MAX_FILE_SIZE:
-         raise HTTPException(status_code=400, detail="File size exceeds 1MB limit")
+    if len(new_content.encode("utf-8")) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="File size exceeds 1MB limit")
 
     # 3. Save
     script_path = os.path.join(COMPUTATIONS_DIR, script.filename)

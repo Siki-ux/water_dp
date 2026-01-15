@@ -1,15 +1,14 @@
 import logging
-import uuid
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Body
-from pydantic import BaseModel, UUID4, Field
+from fastapi import APIRouter, Body, Depends, HTTPException
+from pydantic import UUID4, BaseModel
 from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.core.database import get_db
-from app.models.alerts import AlertDefinition, Alert
+from app.models.alerts import Alert, AlertDefinition
 from app.services.project_service import ProjectService
 
 logger = logging.getLogger(__name__)
@@ -17,6 +16,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # --- Pydantic Schemas ---
+
 
 class AlertDefinitionBase(BaseModel):
     name: str
@@ -27,8 +27,10 @@ class AlertDefinitionBase(BaseModel):
     severity: str = "warning"
     is_active: bool = True
 
+
 class AlertDefinitionCreate(AlertDefinitionBase):
     project_id: UUID4
+
 
 class AlertDefinitionRead(AlertDefinitionBase):
     id: UUID4
@@ -37,6 +39,7 @@ class AlertDefinitionRead(AlertDefinitionBase):
 
     class ConfigDict:
         from_attributes = True
+
 
 class AlertRead(BaseModel):
     id: UUID4
@@ -51,7 +54,9 @@ class AlertRead(BaseModel):
     class ConfigDict:
         from_attributes = True
 
+
 # --- Endpoints ---
+
 
 @router.get("/definitions/{project_id}", response_model=List[AlertDefinitionRead])
 def get_alert_definitions(
@@ -63,13 +68,12 @@ def get_alert_definitions(
     List alert definitions for a project.
     """
     ProjectService._check_access(db, project_id, current_user, required_role="viewer")
-    
+
     definitions = (
-        db.query(AlertDefinition)
-        .filter(AlertDefinition.project_id == project_id)
-        .all()
+        db.query(AlertDefinition).filter(AlertDefinition.project_id == project_id).all()
     )
     return definitions
+
 
 @router.post("/definitions", response_model=AlertDefinitionRead)
 def create_alert_definition(
@@ -80,8 +84,10 @@ def create_alert_definition(
     """
     Create a new alert definition.
     """
-    ProjectService._check_access(db, definition.project_id, current_user, required_role="editor")
-    
+    ProjectService._check_access(
+        db, definition.project_id, current_user, required_role="editor"
+    )
+
     db_def = AlertDefinition(
         name=definition.name,
         description=definition.description,
@@ -98,6 +104,7 @@ def create_alert_definition(
     db.refresh(db_def)
     return db_def
 
+
 @router.delete("/definitions/{definition_id}")
 def delete_alert_definition(
     definition_id: UUID4,
@@ -107,15 +114,20 @@ def delete_alert_definition(
     """
     Delete an alert definition.
     """
-    db_def = db.query(AlertDefinition).filter(AlertDefinition.id == definition_id).first()
+    db_def = (
+        db.query(AlertDefinition).filter(AlertDefinition.id == definition_id).first()
+    )
     if not db_def:
         raise HTTPException(status_code=404, detail="Alert definition not found")
-        
-    ProjectService._check_access(db, db_def.project_id, current_user, required_role="editor")
-    
+
+    ProjectService._check_access(
+        db, db_def.project_id, current_user, required_role="editor"
+    )
+
     db.delete(db_def)
     db.commit()
     return {"ok": True}
+
 
 @router.get("/history/{project_id}", response_model=List[AlertRead])
 def get_alert_history(
@@ -128,7 +140,7 @@ def get_alert_history(
     Get history of triggered alerts for a project.
     """
     ProjectService._check_access(db, project_id, current_user, required_role="viewer")
-    
+
     # Join with definition to filter by project
     alerts = (
         db.query(Alert)
@@ -139,6 +151,7 @@ def get_alert_history(
         .all()
     )
     return alerts
+
 
 @router.post("/history/{alert_id}/acknowledge")
 def acknowledge_alert(
@@ -152,12 +165,18 @@ def acknowledge_alert(
     alert = db.query(Alert).filter(Alert.id == alert_id).first()
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
-        
+
     # Check access to the project owning the alert's definition
-    definition = db.query(AlertDefinition).filter(AlertDefinition.id == alert.definition_id).first()
+    definition = (
+        db.query(AlertDefinition)
+        .filter(AlertDefinition.id == alert.definition_id)
+        .first()
+    )
     if definition:
-         ProjectService._check_access(db, definition.project_id, current_user, required_role="viewer")
-    
+        ProjectService._check_access(
+            db, definition.project_id, current_user, required_role="viewer"
+        )
+
     alert.status = "acknowledged"
     alert.acknowledged_by = current_user.get("sub")
     alert.acknowledged_at = datetime.utcnow()
@@ -175,18 +194,22 @@ def trigger_test_alert(
     """
     Manually trigger an alert for testing/demo purposes.
     """
-    db_def = db.query(AlertDefinition).filter(AlertDefinition.id == definition_id).first()
+    db_def = (
+        db.query(AlertDefinition).filter(AlertDefinition.id == definition_id).first()
+    )
     if not db_def:
         raise HTTPException(status_code=404, detail="Alert definition not found")
-        
-    ProjectService._check_access(db, db_def.project_id, current_user, required_role="editor")
-    
+
+    ProjectService._check_access(
+        db, db_def.project_id, current_user, required_role="editor"
+    )
+
     # Create Alert
     alert = Alert(
         definition_id=db_def.id,
         status="active",
         message=message,
-        details={"executor": "manual_test", "triggered_by": current_user.get("sub")}
+        details={"executor": "manual_test", "triggered_by": current_user.get("sub")},
     )
     db.add(alert)
     db.commit()
