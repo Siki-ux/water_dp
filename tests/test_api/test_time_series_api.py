@@ -13,13 +13,12 @@ def test_get_time_series_metadata_success(client, mock_db_session):
 
     mock_meta = [
         {
-            "id": 1,
+            "id": "1",
             "series_id": "DS_1",
             "name": "DS_1",
             "description": "Desc",
             "parameter": "Water Level",
             "unit": "m",
-            "station_id": "ST_1",
             "source_type": SourceType.SENSOR,
             "source_id": None,
             "data_type": DataType.CONTINUOUS,
@@ -65,13 +64,12 @@ def test_get_metadata_by_id_success(client):
     from app.schemas.time_series import DataType, QualityLevel, SourceType
 
     mock_meta = {
-        "id": 1,
+        "id": "1",
         "series_id": "DS_1",
         "name": "DS_1",
         "description": "Desc",
         "parameter": "Water Level",
         "unit": "m",
-        "station_id": "ST_1",
         "source_type": SourceType.SENSOR,
         "source_id": None,
         "data_type": DataType.CONTINUOUS,

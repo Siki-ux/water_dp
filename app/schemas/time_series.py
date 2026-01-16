@@ -161,12 +161,16 @@ class TimeSeriesQuery(BaseModel):
     limit: int = Field(
         default=1000, ge=1, le=100000, description="Maximum number of records"
     )
+    offset: int = Field(default=0, ge=0, description="Number of records to skip")
     quality_filter: Optional[str] = Field(None, description="Filter by quality flag")
     include_interpolated: bool = Field(
         default=True, description="Include interpolated values"
     )
     include_aggregated: bool = Field(
         default=True, description="Include aggregated values"
+    )
+    sort_order: str = Field(
+        default="asc", pattern="^(asc|desc)$", description="Sort order (asc or desc)"
     )
 
     @field_validator("end_time")

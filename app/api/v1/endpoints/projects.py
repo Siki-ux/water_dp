@@ -1,4 +1,6 @@
-from typing import Any, List
+import logging
+from datetime import datetime
+from typing import Any, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -16,11 +18,15 @@ from app.schemas.user_context import (
     ProjectResponse,
     ProjectSensorResponse,
     ProjectUpdate,
+    SensorCreate,
+    SensorDataPoint,
+    SensorDetail,
 )
 from app.services.dashboard_service import DashboardService
 from app.services.project_service import ProjectService
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # --- Projects ---
 
@@ -63,7 +69,7 @@ def update_project(
     db: Session = Depends(get_db),
     current_user: dict = Depends(deps.get_current_user),
 ) -> Any:
-    """Update project details."""
+    # Need to import ProjectUpdate schema if not available, but it should be in user_context
     return ProjectService.update_project(db, project_id, project_in, current_user)
 
 
@@ -149,25 +155,115 @@ def remove_project_member(
 # --- Project Sensors ---
 
 
-@router.get("/{project_id}/sensors", response_model=List[str])
+@router.get("/{project_id}/sensors", response_model=List[SensorDetail])
 def list_project_sensors(
     project_id: UUID,
     db: Session = Depends(get_db),
     current_user: dict = Depends(deps.get_current_user),
 ) -> Any:
-    """List sensors in project."""
-    return ProjectService.list_sensors(db, project_id, current_user)
+    """List sensors in project with details."""
+    # 1. Get List of IDs
+    sensor_ids = ProjectService.list_sensors(db, project_id, current_user)
+
+    # 2. Fetch Details from TimeSeriesService
+    from app.services.time_series_service import TimeSeriesService
+
+    ts_service = TimeSeriesService(db)
+
+    results = []
+
+    for sid in sensor_ids:
+        try:
+            # Get Station (Thing)
+            station = ts_service.get_station(sid)
+            if not station:
+                continue
+
+            # Consolidate ID
+            real_id = str(station.get("id"))
+
+            # Get Latest Data using consolidated ID
+            latest_data_raw = ts_service.get_latest_data(real_id)
+
+            # Map latest data
+            data_points = []
+            last_timestamp = None
+
+            for d in latest_data_raw:
+                dp = SensorDataPoint(
+                    parameter=d.get("parameter", "unknown"),
+                    value=d.get("value"),
+                    unit=d.get("unit", ""),
+                    timestamp=d.get("timestamp"),
+                )
+                data_points.append(dp)
+
+                # Track most recent update
+                if not last_timestamp or (
+                    dp.timestamp and dp.timestamp > last_timestamp
+                ):
+                    last_timestamp = dp.timestamp
+
+            results.append(
+                SensorDetail(
+                    id=real_id,
+                    name=station.get("name") or "Unknown Sensor",
+                    description=station.get("description"),
+                    latitude=station.get("latitude"),
+                    longitude=station.get("longitude"),
+                    status=station.get("status", "active"),
+                    last_activity=last_timestamp,
+                    updated_at=station.get("updated_at")
+                    or last_timestamp
+                    or datetime.now(),
+                    latest_data=data_points,
+                    station_type=station.get("station_type", "unknown"),
+                    properties=station.get("properties", {}),
+                )
+            )
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch details for sensor {sid}: {e}")
+            continue
+
+    return results
+
+
+@router.get("/{project_id}/available-sensors", response_model=List[Any])
+def get_available_sensors(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(deps.get_current_user),
+) -> Any:
+    """List sensors available in FROST that are NOT linked to this project."""
+    return ProjectService.get_available_sensors(db, project_id, current_user)
 
 
 @router.post("/{project_id}/sensors", response_model=ProjectSensorResponse)
 def add_project_sensor(
     project_id: UUID,
-    sensor_id: str = Query(..., description="TimeIO Thing ID"),
+    sensor_id: Optional[str] = Query(None, description="TimeIO Thing ID"),
+    sensor_data: Optional[SensorCreate] = None,
     db: Session = Depends(get_db),
     current_user: dict = Depends(deps.get_current_user),
 ) -> Any:
-    """Add a sensor to the project."""
-    return ProjectService.add_sensor(db, project_id, sensor_id, current_user)
+    """
+    Add a sensor to the project.
+
+    - If `sensor_id` is provided: Links an existing sensor.
+    - If `sensor_data` is provided: Creates a new sensor and links it.
+    """
+    if sensor_id:
+        return ProjectService.add_sensor(db, project_id, sensor_id, current_user)
+    elif sensor_data:
+        return ProjectService.create_and_link_sensor(
+            db, project_id, sensor_data, current_user
+        )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Must provide either sensor_id (to link) or body (to create).",
+        )
 
 
 @router.delete("/{project_id}/sensors/{sensor_id}")

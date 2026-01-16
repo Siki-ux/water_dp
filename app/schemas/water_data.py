@@ -56,7 +56,7 @@ class QualityFlag(str, Enum):
 
 
 class WaterStationBase(BaseModel):
-    station_id: str = Field(..., description="Unique station identifier")
+    id: str = Field(..., description="Unique station identifier (FROST ID)")
     name: str = Field(..., description="Station name")
     description: Optional[str] = Field(None, description="Station description")
     latitude: Optional[float] = Field(
@@ -95,7 +95,6 @@ class WaterStationUpdate(BaseModel):
 
 
 class WaterStationResponse(WaterStationBase):
-    id: int
     created_at: datetime
     updated_at: datetime
 
@@ -103,7 +102,6 @@ class WaterStationResponse(WaterStationBase):
 
 
 class WaterDataPointBase(BaseModel):
-    station_id: int = Field(..., description="Station ID")
     timestamp: datetime = Field(..., description="Measurement timestamp")
     parameter: ParameterType = Field(..., description="Measured parameter")
     value: float = Field(..., description="Measured value")
@@ -133,7 +131,7 @@ class WaterDataPointUpdate(BaseModel):
 
 
 class WaterDataPointResponse(WaterDataPointBase):
-    id: int
+    id: str
     created_at: datetime
     updated_at: datetime
 
@@ -141,7 +139,6 @@ class WaterDataPointResponse(WaterDataPointBase):
 
 
 class WaterQualityBase(BaseModel):
-    station_id: int = Field(..., description="Station ID")
     timestamp: datetime = Field(..., description="Measurement timestamp")
     temperature: Optional[float] = Field(None, description="Water temperature (°C)")
     ph: Optional[float] = Field(None, ge=0, le=14, description="pH level")
@@ -185,7 +182,7 @@ class WaterQualityUpdate(BaseModel):
 
 
 class WaterQualityResponse(WaterQualityBase):
-    id: int
+    id: str
     created_at: datetime
     updated_at: datetime
 
@@ -212,7 +209,7 @@ class StationQuery(BaseModel):
 class DataPointQuery(BaseModel):
     """Query parameters for data points."""
 
-    station_id: int = Field(..., description="Station ID")
+    id: str = Field(..., description="FROST Thing ID")
     start_time: Optional[datetime] = Field(None, description="Start time filter")
     end_time: Optional[datetime] = Field(None, description="End time filter")
     parameter: Optional[ParameterType] = Field(None, description="Filter by parameter")
@@ -255,7 +252,7 @@ class DataPointListResponse(BaseModel):
 
     data_points: List[WaterDataPointResponse]
     total: int
-    station_id: int
+    id: str
     parameter: Optional[str] = None
     time_range: Optional[Dict[str, datetime]] = None
 
@@ -263,8 +260,9 @@ class DataPointListResponse(BaseModel):
 class StationStatistics(BaseModel):
     """Station statistics response."""
 
-    station_id: int
+    id: str
     time_range: Dict[str, Optional[datetime]]
     parameters: List[Dict[str, Any]]
     total_measurements: int
     data_quality_summary: Dict[str, int]
+    statistics: Optional[Dict[str, float]] = None

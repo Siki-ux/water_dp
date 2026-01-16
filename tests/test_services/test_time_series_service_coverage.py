@@ -93,7 +93,6 @@ class TestTimeSeriesServiceCoverage:
     def test_create_data_point_coverage(self, service):
         """Test create_data_point including Datastream lookup."""
         data_point = WaterDataPointCreate(
-            station_id=10,
             timestamp=datetime(2023, 1, 1, 12, 0),
             value=42.0,
             parameter=ParameterType.TEMPERATURE,  # Ensure using Enum if required, or string
@@ -115,9 +114,9 @@ class TestTimeSeriesServiceCoverage:
                 "Location": "http://frost/Observations(888)"
             }
 
-            res = service.create_data_point(data_point)
+            res = service.create_data_point("10", data_point)
 
-            assert res["id"] == 888
+            assert res["id"] == "888"
             assert res["value"] == 42.0
 
             # Verify DS lookup used correct name format
@@ -128,7 +127,6 @@ class TestTimeSeriesServiceCoverage:
     def test_create_data_point_no_datastream(self, service):
         """Test create_data_point when datastream doesn't exist."""
         data_point = WaterDataPointCreate(
-            station_id=10,
             timestamp=datetime.now(),
             value=1.0,
             parameter=ParameterType.WATER_LEVEL,
@@ -140,7 +138,7 @@ class TestTimeSeriesServiceCoverage:
             mock_get.return_value.json.return_value = {"value": []}  # Empty
 
             with pytest.raises(TimeSeriesException) as exc:
-                service.create_data_point(data_point)
+                service.create_data_point("10", data_point)
             assert "Datastream" in str(exc.value)
 
     def test_get_latest_data_coverage(self, service):
@@ -199,8 +197,9 @@ class TestTimeSeriesServiceCoverage:
             results = service.get_latest_data(station_id=50)
 
             assert len(results) == 1
-            assert results[0]["parameter"] == "Temp"
+            assert results[0]["parameter"] == "temp"
             assert results[0]["value"] == 25.0
+            assert "station_id" not in results[0]
             assert mock_get.call_count == 3
 
     def test_unexpected_json_errors(self, service):
@@ -320,44 +319,34 @@ class TestTimeSeriesServiceCoverage:
             assert s["mean"] == 20.0
 
     def test_get_station_statistics_coverage(self, service):
-        """Test get_station_statistics aggregation of multiple datastreams."""
-        from app.schemas.time_series import TimeSeriesStatistics
+        """Test get_station_statistics with the new count/min/max implementation."""
+        # Mock responses for:
+        # 1. Datastreams lookup
+        # 2. Observation count ($count=true)
+        # 3. Observation min ($orderby=result asc)
+        # 4. Observation max ($orderby=result desc)
 
-        # Mock datastreams logic
-        mock_ds_resp = {
-            "value": [
-                {
-                    "name": "DS1",
-                    "ObservedProperty": {"name": "Temp"},
-                    "unitOfMeasurement": {"name": "C"},
-                }
+        ds_resp = {"value": [{"@iot.id": "DS_1", "ObservedProperty": {"name": "Temp"}}]}
+        count_resp = {"@iot.count": 100, "value": []}
+        min_resp = {"value": [{"result": 5.0}]}
+        max_resp = {"value": [{"result": 25.0}]}
+
+        with patch("app.services.time_series_service.requests.get") as mock_get:
+            mock_get.side_effect = [
+                MagicMock(
+                    status_code=200, json=lambda: ds_resp, raise_for_status=lambda: None
+                ),
+                MagicMock(status_code=200, json=lambda: count_resp),
+                MagicMock(status_code=200, json=lambda: min_resp),
+                MagicMock(status_code=200, json=lambda: max_resp),
             ]
-        }
-
-        # Mock calculate_statistics result
-        mock_stats = TimeSeriesStatistics(
-            series_id="DS1",
-            total_points=100,
-            statistics={"count": 100, "min": 5, "max": 25, "mean": 15},
-            time_range={"start": datetime(2023, 1, 1), "end": datetime(2023, 1, 2)},
-            quality_summary={"good": 100},
-            gaps=[],
-        )
-
-        with patch(
-            "app.services.time_series_service.requests.get"
-        ) as mock_get, patch.object(
-            service, "calculate_statistics", return_value=mock_stats
-        ):
-
-            mock_get.return_value.status_code = 200
-            mock_get.return_value.json.return_value = mock_ds_resp
 
             result = service.get_station_statistics(
-                station_id=1, start_time=None, end_time=None
+                station_id="ST1", start_time=None, end_time=None
             )
 
-            assert result["station_id"] == 1
+            assert result["id"] == "ST1"
             assert result["total_measurements"] == 100
-            assert len(result["parameters"]) == 1
-            assert result["parameters"][0]["parameter"] == "Temp"
+            assert result["statistics"]["min"] == 5.0
+            assert result["statistics"]["max"] == 25.0
+            assert "station_id" not in result

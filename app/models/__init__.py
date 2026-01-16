@@ -2,6 +2,7 @@
 Database models for the Water Data Platform.
 """
 
+from .alerts import Alert, AlertDefinition
 from .base import BaseModel
 from .computations import ComputationJob, ComputationScript
 from .datasource import DataSource
@@ -19,4 +20,6 @@ __all__ = [
     "ComputationScript",
     "ComputationJob",
     "DataSource",
+    "AlertDefinition",
+    "Alert",
 ]

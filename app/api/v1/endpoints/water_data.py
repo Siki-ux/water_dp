@@ -56,21 +56,27 @@ async def get_station(station_id: str, db: Session = Depends(get_db)):
     return service.get_station(station_id)
 
 
-@router.post("/data-points", response_model=WaterDataPointResponse, status_code=201)
+@router.post(
+    "/stations/{id}/data-points", response_model=WaterDataPointResponse, status_code=201
+)
 async def create_data_point(
+    id: str,
     data_point: WaterDataPointCreate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     """Create a new water data point."""
     service = TimeSeriesService(db)
-    return service.create_data_point(data_point)
+    return service.create_data_point(id, data_point)
 
 
 @router.post(
-    "/data-points/bulk", response_model=List[WaterDataPointResponse], status_code=201
+    "/stations/{id}/data-points/bulk",
+    response_model=List[WaterDataPointResponse],
+    status_code=201,
 )
 async def create_bulk_data_points(
+    id: str,
     bulk_data: BulkDataPointCreate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -79,19 +85,21 @@ async def create_bulk_data_points(
     service = TimeSeriesService(db)
     created_points = []
     for data_point in bulk_data.data_points:
-        point = service.create_data_point(data_point)
+        point = service.create_data_point(id, data_point)
         created_points.append(point)
     return created_points
 
 
 @router.get("/data-points", response_model=DataPointListResponse)
 async def get_data_points(
-    station_id: int = Query(..., description="Station ID"),
+    id: str = Query(..., description="Station ID"),
     start_time: Optional[str] = Query(None, description="Start time (ISO format)"),
     end_time: Optional[str] = Query(None, description="End time (ISO format)"),
     parameter: Optional[str] = Query(None, description="Filter by parameter"),
     quality_filter: Optional[str] = Query(None, description="Filter by quality flag"),
     limit: int = Query(1000, ge=1, le=10000, description="Maximum number of records"),
+    offset: int = Query(0, ge=0, description="Number of records to skip"),
+    sort_order: str = Query("asc", pattern="^(asc|desc)$", description="Sort order"),
     db: Session = Depends(get_db),
 ):
     """Get water data points with filtering."""
@@ -109,7 +117,7 @@ async def get_data_points(
             raise HTTPException(status_code=400, detail=f"Invalid datetime format: {e}")
 
         # 1. Fetch Datastreams for this station/parameter to get metadata (unit, etc.)
-        datastreams_result = service.get_datastreams_for_station(station_id, parameter)
+        datastreams_result = service.get_datastreams_for_station(id, parameter)
 
         mapped_points = []
         for ds in datastreams_result:
@@ -119,7 +127,12 @@ async def get_data_points(
 
             # 2. Fetch Observations for this datastream
             query = TimeSeriesQuery(
-                series_id=ds_name, start_time=start_dt, end_time=end_dt, limit=limit
+                series_id=ds_name,
+                start_time=start_dt,
+                end_time=end_dt,
+                limit=limit,
+                offset=offset,
+                sort_order=sort_order,
             )
             data_points = service.get_time_series_data(query)
 
@@ -137,8 +150,7 @@ async def get_data_points(
                     param_slug = "water_level"
 
                 mapped_data = {
-                    "id": dp.id,
-                    "station_id": station_id,
+                    "id": str(dp.id),
                     "timestamp": dp.timestamp,
                     "parameter": param_slug,
                     "value": dp.value,
@@ -157,7 +169,7 @@ async def get_data_points(
         return DataPointListResponse(
             data_points=mapped_points,
             total=len(mapped_points),
-            station_id=station_id,
+            id=id,
             parameter=parameter,
             time_range=(
                 {"start": start_dt, "end": end_dt} if start_dt and end_dt else None
@@ -170,19 +182,19 @@ async def get_data_points(
 
 @router.get("/data-points/latest", response_model=List[WaterDataPointResponse])
 async def get_latest_data_points(
-    station_id: int = Query(..., description="Station ID"),
+    id: str = Query(..., description="Station ID"),
     parameter: Optional[str] = Query(None, description="Filter by parameter"),
     db: Session = Depends(get_db),
 ):
     """Get latest data points for a station."""
     service = TimeSeriesService(db)
-    data_points = service.get_latest_data(station_id, parameter)
+    data_points = service.get_latest_data(id, parameter)
     return data_points
 
 
 @router.get("/stations/{station_id}/statistics", response_model=StationStatistics)
 async def get_station_statistics(
-    station_id: int,
+    station_id: str,
     start_time: Optional[str] = Query(None, description="Start time (ISO format)"),
     end_time: Optional[str] = Query(None, description="End time (ISO format)"),
     db: Session = Depends(get_db),
@@ -227,7 +239,7 @@ async def create_quality_data(
 
 @router.get("/quality", response_model=List[WaterQualityResponse])
 async def get_quality_data(
-    station_id: int = Query(..., description="Station ID"),
+    id: str = Query(..., description="Station ID"),
     start_time: Optional[str] = Query(None, description="Start time (ISO format)"),
     end_time: Optional[str] = Query(None, description="End time (ISO format)"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of records"),

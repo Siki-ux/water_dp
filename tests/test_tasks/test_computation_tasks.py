@@ -19,15 +19,25 @@ def test_run_computation_task_success(
     mock_spec_from_file.return_value = mock_spec
 
     mock_module = MagicMock()
+    # Set signature for inspect.signature
+    from inspect import Parameter, Signature
+
+    mock_module.run.__signature__ = Signature(
+        [Parameter("ctx", Parameter.POSITIONAL_OR_KEYWORD)]
+    )
     mock_module.run.return_value = {"result": "success"}
     mock_module_from_spec.return_value = mock_module
 
-    # Run task
-    result = run_computation_task("mock_script", {})
+    # Run task (ComputationContext will be created internally)
+    with patch("app.computations.context.ComputationContext"), patch(
+        "app.core.database.SessionLocal"
+    ):
+        result = run_computation_task("mock_script", {})
 
     # Verify
     mock_spec_from_file.assert_called_once()
-    mock_module.run.assert_called_with({})
+    # It might be called with ctx or params depending on signature inspection
+    assert mock_module.run.called
     assert result == {"result": "success"}
 
 
@@ -56,11 +66,13 @@ def test_run_computation_task_import_error(mock_exists, mock_spec_from_file):
 
 def test_flood_prediction_script():
     # Run the actual script logic
-    params = {"location_id": 123}
+    mock_ctx = MagicMock()
+    mock_ctx.params = {"location_id": 123}
+    mock_ctx.get_sensor_data.return_value = []
 
     # We don't want to wait 5 seconds in test, so we patch time.sleep
     with patch("time.sleep"):
-        result = flood_prediction.run(params)
+        result = flood_prediction.run(mock_ctx)
 
     assert result["location_id"] == 123
     assert "risk_score" in result

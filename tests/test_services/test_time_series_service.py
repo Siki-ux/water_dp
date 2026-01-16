@@ -193,6 +193,7 @@ class TestTimeSeriesService:
 
             assert len(stations) == 1
             assert stations[0]["name"] == "Test Station"
+            assert stations[0]["id"] == "1"
             assert stations[0]["latitude"] == 50.0
             assert stations[0]["longitude"] == 10.0
 
@@ -224,4 +225,4 @@ class TestTimeSeriesService:
 
             station = service.get_station("ST_1")
             assert station is not None
-            assert station["station_id"] == "ST_1"
+            assert station["id"] == "1"

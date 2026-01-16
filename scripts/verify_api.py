@@ -48,9 +48,9 @@ def test_features():
             print(f"Sample Feature ID: {f['feature_id']}")
             props = f.get("properties", {})
             print(f"Properties: {props}")
-            station_id = props.get("station_id")
-            if station_id:
-                print(f"SUCCESS: Found station_id link: {station_id}")
+            sensor_id = props.get("id")
+            if sensor_id:
+                print(f"SUCCESS: Found id link: {sensor_id}")
 
                 # Test single feature retrieval
                 print(f"Testing Single Feature ({f['feature_id']})...")
@@ -62,9 +62,9 @@ def test_features():
                 ), f"Status: {r_single.status_code}, Body: {r_single.text}"
                 print("SUCCESS: Single feature retrieval works.")
 
-                return station_id
+                return sensor_id
             else:
-                print("ERROR: No station_id in properties.")
+                print("ERROR: No id in properties.")
         else:
             print("ERROR: No features returned.")
     except Exception as e:
@@ -88,14 +88,14 @@ def test_metadata():
         print(f"Metadata test failed: {e}")
 
 
-def test_time_series(station_id):
-    if not station_id:
-        print("\nSkipping Time Series test because no station_id was found.")
+def test_time_series(sensor_id):
+    if not sensor_id:
+        print("\nSkipping Time Series test because no id was found.")
         return
 
-    print(f"\nTesting Time Series for station {station_id}...")
-    # The seeding logic creates series_id = f"TS_{station_id}_LEVEL"
-    series_id = f"DS_{station_id}_LEVEL"
+    print(f"\nTesting Time Series for sensor {sensor_id}...")
+    # The seeding logic creates series_id = f"DS_{sensor_id}_LEVEL"
+    series_id = f"DS_{sensor_id}_LEVEL"
 
     try:
         r = requests.get(f"{BASE_URL}/time-series/data?series_id={series_id}&limit=5")
@@ -119,9 +119,9 @@ if __name__ == "__main__":
     try:
         test_layers()
         test_single_layer()
-        station_id = test_features()
+        sensor_id = test_features()
         test_metadata()
-        test_time_series(station_id)
+        test_time_series(sensor_id)
         print("\nVerification Complete.")
     except Exception as e:
         print(f"\nVerification Script Failed: {e}")

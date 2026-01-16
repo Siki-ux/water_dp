@@ -5,6 +5,7 @@ API v1 router configuration.
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    alerts,
     auth,
     bulk,
     computations,
@@ -36,3 +37,4 @@ api_router.include_router(
     computations.router, prefix="/computations", tags=["computations"]
 )
 api_router.include_router(datasources.router, tags=["datasources"])
+api_router.include_router(alerts.router, prefix="/alerts", tags=["alerts"])

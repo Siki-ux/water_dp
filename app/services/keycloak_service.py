@@ -117,3 +117,17 @@ class KeycloakService:
             logger.error(f"Error fetching user ID {user_id} from Keycloak: {e}")
             cls._admin_client = None
             return None
+
+    @classmethod
+    def create_group(cls, group_name: str) -> Optional[str]:
+        """Create a new group in Keycloak and return its ID."""
+        try:
+            admin = cls.get_admin_client()
+            payload = {"name": group_name}
+            # create_group returns the group ID
+            group_id = admin.create_group(payload)
+            return group_id
+        except Exception as e:
+            logger.error(f"Error creating group '{group_name}' in Keycloak: {e}")
+            cls._admin_client = None
+            return None

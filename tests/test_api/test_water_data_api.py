@@ -16,9 +16,8 @@ def test_get_station_success(client):
     from datetime import datetime
 
     mock_station = {
-        "id": 1,
+        "id": "ST_1",
         "name": "S1",
-        "station_id": "ST_1",
         "latitude": 0,
         "longitude": 0,
         "station_type": "river",
@@ -30,7 +29,7 @@ def test_get_station_success(client):
 
         response = client.get("/api/v1/water-data/stations/ST_1")
         assert response.status_code == 200
-        assert response.json()["station_id"] == "ST_1"
+        assert response.json()["id"] == "ST_1"
 
 
 def test_get_station_not_found(client):
@@ -46,7 +45,6 @@ def test_get_station_not_found(client):
 def test_create_data_point_error(client):
     # Use valid enum for parameter: water_level
     data = {
-        "station_id": 1,
         "timestamp": "2023-01-01T00:00:00Z",
         "value": 10.0,
         "parameter": "water_level",
@@ -57,5 +55,32 @@ def test_create_data_point_error(client):
             "Fail"
         )
 
-        response = client.post("/api/v1/water-data/data-points", json=data)
+        response = client.post("/api/v1/water-data/stations/1/data-points", json=data)
         assert response.status_code == 500
+
+
+def test_get_data_points_pagination(client):
+    """Test data points retrieval with pagination (limit/offset)."""
+    with patch("app.api.v1.endpoints.water_data.TimeSeriesService") as MockService:
+        # Reset and mock real flow
+        ds = [
+            {
+                "name": "DS_1",
+                "ObservedProperty": {"name": "Water Level"},
+                "unitOfMeasurement": {"name": "m"},
+            }
+        ]
+        MockService.return_value.get_datastreams_for_station.return_value = ds
+        MockService.return_value.get_time_series_data.return_value = []
+
+        response = client.get(
+            "/api/v1/water-data/data-points?id=ST_1&limit=10&offset=5"
+        )
+        assert response.status_code == 200
+
+        # Check call arguments
+        # The second call to service (get_time_series_data) should have the query
+        call_args = MockService.return_value.get_time_series_data.call_args
+        query_obj = call_args[0][0]
+        assert query_obj.limit == 10
+        assert query_obj.offset == 5

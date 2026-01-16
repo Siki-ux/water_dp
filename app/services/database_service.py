@@ -3,7 +3,7 @@ Database service for CRUD operations and data management.
 """
 
 import logging
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -210,3 +210,99 @@ class DatabaseService:
             logger.error(f"Failed to delete geo feature {feature_id}: {e}")
             self.db.rollback()
             raise DatabaseException(f"Failed to delete geo feature: {e}")
+
+    def get_sensors_in_layer(self, layer_name: str) -> List[Dict[str, Any]]:
+        """
+        Get all sensors (Things) that are spatially within the geometry of a layer's features.
+        Assumes FROST schema Tables (THINGS, LOCATIONS) are present.
+        """
+        from sqlalchemy import text
+
+        # 1. Check if layer exists
+        self.get_geo_layer(layer_name)
+
+        # 2. Perform Spatial Join
+        # Note: We join geo_features for the specific layer with FROST Locations
+        try:
+            query = text(
+                """
+                SELECT DISTINCT
+                    t."ID" as id,
+                    t."NAME" as name,
+                    t."DESCRIPTION" as description,
+                    ST_X(ST_Centroid(ST_GeomFromGeoJSON(l."LOCATION"::jsonb))) as lng,
+                    ST_Y(ST_Centroid(ST_GeomFromGeoJSON(l."LOCATION"::jsonb))) as lat
+                FROM "THINGS" t
+                JOIN "THINGS_LOCATIONS" tl ON t."ID" = tl."THING_ID"
+                JOIN "LOCATIONS" l ON tl."LOCATION_ID" = l."ID"
+                JOIN "geo_features" gf ON ST_Intersects(ST_GeomFromGeoJSON(l."LOCATION"::jsonb), gf.geometry)
+                WHERE gf.layer_id = :layer_name
+            """
+            )
+
+            result = self.db.execute(query, {"layer_name": layer_name})
+
+            sensors = []
+            for row in result:
+                # Handle potential case sensitivity or type mismatch by dict access
+                # SQLAlchemy row is accessible by column name, but let's be safe
+                sensors.append(
+                    {
+                        "id": str(row[0]),  # Ensure ID is string (handle int/str IDs)
+                        "name": row[1],
+                        "description": row[2],
+                        "latitude": row[4],
+                        "longitude": row[3],
+                    }
+                )
+
+            return sensors
+
+        except Exception as e:
+            logger.error(f"Failed to query sensors in layer {layer_name}: {e}")
+            # Identify if it's a table-not-found error (e.g. FROST not set up or lowercase tables)
+            if "relation" in str(e) and "does not exist" in str(e):
+                # Try lowercase fallback?
+                logger.warning(
+                    "FROST Tables not found in uppercase, checking lowercase fallback..."
+                )
+                # For now just re-raise, but good to know for debugging
+            raise DatabaseException(f"Failed to query sensors in layer: {e}")
+
+    def get_layer_bbox(self, layer_name: str) -> Optional[List[float]]:
+        """
+        Get the bounding box of a layer.
+        Returns [min_lon, min_lat, max_lon, max_lat].
+        """
+        from sqlalchemy import text
+
+        try:
+            # Check layer exists
+            self.get_geo_layer(layer_name)
+
+            # Query for cleaner output using ST_XMin, ST_YMin, etc.
+            query = text(
+                """
+                SELECT
+                    ST_XMin(ST_Extent(geometry)),
+                    ST_YMin(ST_Extent(geometry)),
+                    ST_XMax(ST_Extent(geometry)),
+                    ST_YMax(ST_Extent(geometry))
+                FROM geo_features
+                WHERE layer_id = :layer_name
+            """
+            )
+            result = self.db.execute(query, {"layer_name": layer_name}).fetchone()
+
+            if result and all(x is not None for x in result):
+                return [
+                    float(result[0]),
+                    float(result[1]),
+                    float(result[2]),
+                    float(result[3]),
+                ]
+            return None
+
+        except Exception as e:
+            logger.error(f"Failed to get bbox for layer {layer_name}: {e}")
+            raise DatabaseException(f"Failed to get layer bbox: {e}")

@@ -26,6 +26,7 @@ from app.schemas.time_series import (
     TimeSeriesQuery,
     TimeSeriesStatistics,
 )
+from app.schemas.user_context import SensorCreate
 
 logger = logging.getLogger(__name__)
 
@@ -80,13 +81,13 @@ class TimeSeriesService:
                 lon, lat = coords[0], coords[1]
 
         iot_id = thing.get("@iot.id")
-        int_id = self._get_int_id(iot_id)
+        # Consolidate: use the raw @iot.id (string or int as string) as 'id'
+        str_id = str(iot_id)
 
         current_time = datetime.now()
 
         return {
-            "id": int_id,
-            "station_id": props.get("station_id", str(iot_id)),
+            "id": str_id,
             "name": thing.get("name"),
             "description": thing.get("description"),
             "latitude": lat,
@@ -176,12 +177,21 @@ class TimeSeriesService:
             raise TimeSeriesException(f"Failed to fetch station details: {e}")
 
     def get_datastreams_for_station(
-        self, station_id: int, parameter: Optional[str] = None
+        self, station_id: int | str, parameter: Optional[str] = None
     ) -> List[Dict]:
         """Get all datastreams for a station (Thing)."""
         # Use Navigation Path: Things({id})/Datastreams
         # This is more robust than filtering by Thing/id
-        url = f"{self._get_frost_url()}/Things({station_id})/Datastreams"
+
+        # Handle OData quoting for String IDs
+        # If it's a string of digits, assume it's an Integer ID (unquoted)
+        if isinstance(station_id, str) and not station_id.isdigit():
+            safe_id = self._escape_odata_string(station_id)
+            url_part = f"Things('{safe_id}')"
+        else:
+            url_part = f"Things({station_id})"
+
+        url = f"{self._get_frost_url()}/{url_part}/Datastreams"
 
         params = {"$expand": "ObservedProperty,Thing/Locations"}
 
@@ -342,6 +352,71 @@ class TimeSeriesService:
         except Exception as e:
             logger.error(f"Error processing delete_station for {station_id}: {e}")
             raise
+
+    def create_project_thing(
+        self, name: str, description: str, project_id: str
+    ) -> Optional[str]:
+        """Create a Thing representing a Project in FROST."""
+        payload = {
+            "name": name,
+            "description": description,
+            "properties": {
+                "type": "project",
+                "project_id": str(project_id),
+                "status": "active",
+            },
+        }
+        url = f"{self._get_frost_url()}/Things"
+        try:
+            resp = requests.post(url, json=payload, timeout=self._get_timeout())
+            if resp.status_code == 201:
+                loc = resp.headers.get("Location")
+                if loc:
+                    # Parse ID from location URL: .../Things(123) or .../Things('123')
+                    import re
+
+                    # match (numbers) or ('string')
+                    m = re.search(r"Things\((.+)\)", loc)
+                    if m:
+                        return m.group(1).strip("'")
+            logger.error(
+                f"Failed to create project thing: {resp.status_code} - {resp.text}"
+            )
+        except Exception as e:
+            logger.error(f"Error creating project thing: {e}")
+        return None
+
+    def create_sensor_thing(self, data: SensorCreate) -> Optional[str]:
+        """Create a Thing representing a Sensor in FROST."""
+        payload = {
+            "name": data.name,
+            "description": data.description or "",
+            "properties": {"station_type": data.station_type, "status": "active"},
+            "Locations": [
+                {
+                    "name": "Location",
+                    "encodingType": "application/vnd.geo+json",
+                    "location": {"type": "Point", "coordinates": [data.lng, data.lat]},
+                }
+            ],
+        }
+        url = f"{self._get_frost_url()}/Things"
+        try:
+            resp = requests.post(url, json=payload, timeout=self._get_timeout())
+            if resp.status_code == 201:
+                loc = resp.headers.get("Location")
+                if loc:
+                    import re
+
+                    m = re.search(r"Things\((.+)\)", loc)
+                    if m:
+                        return m.group(1).strip("'")
+            logger.error(
+                f"Failed to create sensor thing: {resp.status_code} - {resp.text}"
+            )
+        except Exception as e:
+            logger.error(f"Error creating sensor thing: {e}")
+        return None
 
     # --- Metadata (Datastreams) ---
     def get_time_series_metadata(
@@ -605,7 +680,7 @@ class TimeSeriesService:
 
         return count
 
-    def create_data_point(self, data_point) -> Dict:
+    def create_data_point(self, station_id: str, data_point) -> Dict:
         """Create a new data point (Observation) in FROST."""
 
         # Determine Datastream Name: DS_{station_id}_{parameter}
@@ -615,16 +690,22 @@ class TimeSeriesService:
             if hasattr(data_point.parameter, "value")
             else data_point.parameter
         )
-        datastream_name = f"DS_{data_point.station_id}_{param_val}"
+        datastream_name = f"DS_{station_id}_{param_val}"
 
         # Find Datastream ID
         url = f"{self._get_frost_url()}/Datastreams"
         escaped_ds_name = self._escape_odata_string(datastream_name)
-        params = {"$filter": f"name eq '{escaped_ds_name}'", "$select": "id"}
+        # Expand Thing to get its ID for Alert Evaluation
+        params = {
+            "$filter": f"name eq '{escaped_ds_name}'",
+            "$select": "id",
+            "$expand": "Thing",
+        }
 
         try:
             resp = requests.get(url, params=params, timeout=self._get_timeout())
             ds_id = None
+            thing_id = None
             if resp.status_code == 200:
                 try:
                     vals = resp.json().get("value", [])
@@ -635,6 +716,8 @@ class TimeSeriesService:
                     raise  # Re-raise as we need the datastream ID to proceed
                 if vals:
                     ds_id = vals[0].get("@iot.id")
+                    if vals[0].get("Thing"):
+                        thing_id = vals[0]["Thing"].get("@iot.id")
 
             if not ds_id:
                 # auto-creation could happen here, but for now specific error
@@ -664,19 +747,34 @@ class TimeSeriesService:
             post_resp.raise_for_status()
 
             # Extract ID
-            new_id = 0
+            new_id = "0"
             loc = post_resp.headers.get("Location")
             if loc:
                 try:
-                    new_id = int(loc.split("(")[1].split(")")[0])
+                    # Parse ID from Location header: .../Observations(123)
+                    import re
+
+                    m = re.search(r"Observations\((.+)\)", loc)
+                    if m:
+                        new_id = m.group(1).strip("'")
                 except Exception as ex:
                     logger.warning(
                         f"Failed to parse new ID from Location header '{loc}': {ex}"
                     )
 
+            # Trigger Alert Evaluation
+            try:
+                from app.services.alert_evaluator import AlertEvaluator
+
+                evaluator = AlertEvaluator(self.db)
+                # Pass the internal Thing ID if available, otherwise fallback to station_id string
+                target_id = str(thing_id) if thing_id else str(station_id)
+                evaluator.evaluate_sensor_data(target_id, data_point.value, param_val)
+            except Exception as e:
+                logger.error(f"Failed to trigger alert evaluation: {e}")
+
             return {
                 "id": new_id,
-                "station_id": data_point.station_id,
                 "timestamp": data_point.timestamp,
                 "parameter": data_point.parameter,
                 "value": data_point.value,
@@ -691,12 +789,22 @@ class TimeSeriesService:
             raise TimeSeriesException(f"Failed to create data point: {e}")
 
     def get_latest_data(
-        self, station_id: int, parameter: Optional[str] = None
+        self, station_id: int | str, parameter: Optional[str] = None
     ) -> List[Dict]:
-        """Get latest data points for a station (Thing)."""
+        """Get latest data points for a station (Thing). station_id should be the FROST @iot.id (string or int)."""
 
         # 1. Find Datastreams via Navigation
-        url = f"{self._get_frost_url()}/Things({station_id})/Datastreams"
+        # Handle OData quoting for String IDs
+        # If it's a string of digits, assume it's an Integer ID (unquoted)
+        if isinstance(station_id, str) and not station_id.isdigit():
+            # Escape valid OData string if needed, but simple quoting is primary requirement
+            # Assuming ID doesn't contain single quotes for now or use escape helper
+            safe_id = self._escape_odata_string(station_id)
+            url_part = f"Things('{safe_id}')"
+        else:
+            url_part = f"Things({station_id})"
+
+        url = f"{self._get_frost_url()}/{url_part}/Datastreams"
 
         params = {"$expand": "ObservedProperty"}
         if parameter:
@@ -721,7 +829,13 @@ class TimeSeriesService:
                 uom = ds.get("unitOfMeasurement", {}).get("name", "unknown")
 
                 # Get latest observation
-                obs_url = f"{self._get_frost_url()}/Datastreams({ds_id})/Observations?$top=1&$orderby=phenomenonTime desc"
+                # Get latest observation
+                if isinstance(ds_id, str) and not str(ds_id).isdigit():
+                    quot_ds_id = f"'{ds_id}'"
+                else:
+                    quot_ds_id = ds_id
+
+                obs_url = f"{self._get_frost_url()}/Datastreams({quot_ds_id})/Observations?$top=1&$orderby=phenomenonTime desc"
                 try:
                     obs_resp = requests.get(obs_url, timeout=self._get_timeout())
                     obs_resp.raise_for_status()
@@ -743,12 +857,18 @@ class TimeSeriesService:
                         except ValueError:
                             t = datetime.now()  # Fallback
 
+                        # Normalize parameter (slugify)
+                        param_slug = op_name.lower().replace(" ", "_").replace("-", "_")
+                        if param_slug == "water_temperature":
+                            param_slug = "temperature"
+                        elif param_slug == "level":
+                            param_slug = "water_level"
+
                         results.append(
                             {
-                                "id": obs.get("@iot.id"),
-                                "station_id": station_id,
+                                "id": str(obs.get("@iot.id")),
                                 "timestamp": t,
-                                "parameter": op_name,
+                                "parameter": param_slug,
                                 "value": obs.get("result"),
                                 "unit": uom,
                                 "quality_flag": obs.get("parameters", {}).get(
@@ -777,8 +897,10 @@ class TimeSeriesService:
         try:
             # Build Params
             params = {
-                "$orderby": "phenomenonTime asc",
+                "$orderby": f"phenomenonTime {query.sort_order}",
                 "$select": "phenomenonTime,result",
+                "$top": query.limit,
+                "$skip": query.offset,
             }
 
             # Filter
@@ -848,7 +970,7 @@ class TimeSeriesService:
                 except ValueError:
                     t = t_str
                 # ID from FROST Observation ID? @iot.id
-                obs_id = item.get("@iot.id", idx)
+                obs_id = str(item.get("@iot.id", idx))
 
                 # Create instance using schema
                 point = TimeSeriesDataResponse(
@@ -1049,7 +1171,7 @@ class TimeSeriesService:
 
     def get_station_statistics(
         self,
-        station_id: int,
+        station_id: str,
         start_time: Optional[datetime],
         end_time: Optional[datetime],
     ) -> Dict:
@@ -1057,7 +1179,15 @@ class TimeSeriesService:
 
         # 1. Get all Datastreams for the station
         url = f"{self._get_frost_url()}/Datastreams"
-        params = {"$filter": f"Thing/id eq {station_id}", "$expand": "ObservedProperty"}
+
+        # Handle ID quoting
+        if isinstance(station_id, str) and not station_id.isdigit():
+            safe_id = self._escape_odata_string(station_id)
+            filter_str = f"Thing/id eq '{safe_id}'"
+        else:
+            filter_str = f"Thing/id eq {station_id}"
+
+        params = {"$filter": filter_str, "$expand": "ObservedProperty"}
 
         try:
             resp = requests.get(url, params=params, timeout=self._get_timeout())
@@ -1065,69 +1195,115 @@ class TimeSeriesService:
             try:
                 datastreams = resp.json().get("value", [])
             except (ValueError, requests.exceptions.JSONDecodeError) as json_err:
-                logger.error(
-                    f"Failed to parse JSON response from FROST: {json_err}. URL: {url}"
-                )
-                datastreams = []  # Fallback to empty list on JSON error
+                logger.error(f"Failed to parse JSON response from FROST: {json_err}")
+                datastreams = []
         except Exception as e:
             logger.error(f"Failed to fetch datastreams for station stats: {e}")
             datastreams = []
 
         total_measurements = 0
-        quality_summary = {"good": 0, "questionable": 0, "bad": 0, "missing": 0}
-        parameters_stats = []
+        global_min = None
+        global_max = None
 
-        global_start = None
-        global_end = None
+        # Date filters
+        time_filter = ""
+        if start_time or end_time:
+            filters = []
+            if start_time:
+                s_iso = start_time.isoformat()
+                if not s_iso.endswith("Z") and "+" not in s_iso:
+                    s_iso += "Z"
+                filters.append(f"phenomenonTime ge {s_iso}")
+            if end_time:
+                e_iso = end_time.isoformat()
+                if not e_iso.endswith("Z") and "+" not in e_iso:
+                    e_iso += "Z"
+                filters.append(f"phenomenonTime le {e_iso}")
+            time_filter = " and ".join(filters)
 
         for ds in datastreams:
-            series_id = ds.get("name")
-            op_name = ds.get("ObservedProperty", {}).get("name", "unknown")
+            ds_id = ds.get("@iot.id")
+            if not ds_id:
+                continue
 
-            # Calculate stats for this series
-            stats = self.calculate_statistics(series_id, start_time, end_time)
+            # Determine ID for URL (quote if string)
+            if isinstance(ds_id, str) and not str(ds_id).isdigit():
+                safe_ds_id = f"'{ds_id}'"
+            else:
+                safe_ds_id = ds_id
 
-            # Extract relevant info
-            ds_count = stats.statistics.get("count", 0)
-            total_measurements += ds_count
-
-            ds_quality = stats.quality_summary
-            for k, v in ds_quality.items():
-                if k in quality_summary:
-                    quality_summary[k] += v
-                else:
-                    # Handle custom flags if necessary
-                    quality_summary["good"] += v  # Fallback or just ignore
-
-            # Time range
-            ts_range = stats.time_range
-            if ts_range.get("start"):
-                s = ts_range["start"]
-                if global_start is None or s < global_start:
-                    global_start = s
-            if ts_range.get("end"):
-                e = ts_range["end"]
-                if global_end is None or e > global_end:
-                    global_end = e
-
-            parameters_stats.append(
-                {
-                    "parameter": op_name,
-                    "series_id": series_id,
-                    "count": ds_count,
-                    "min": stats.statistics.get("min"),
-                    "max": stats.statistics.get("max"),
-                    "avg": stats.statistics.get("mean"),
-                    "unit": ds.get("unitOfMeasurement", {}).get("name", "unknown"),
-                }
+            obs_base_url = (
+                f"{self._get_frost_url()}/Datastreams({safe_ds_id})/Observations"
             )
 
+            # 2. Get Count
+            try:
+                # Use $count=true and $top=0 to just get the count
+                count_params = {"$count": "true", "$top": 0}
+                if time_filter:
+                    count_params["$filter"] = time_filter
+
+                c_resp = requests.get(
+                    obs_base_url, params=count_params, timeout=self._get_timeout()
+                )
+                if c_resp.status_code == 200:
+                    data = c_resp.json()
+                    ds_count = data.get(
+                        "@iot.count", 0
+                    )  # Standard OGC SensorThings uses @iot.count
+                    total_measurements += ds_count
+            except Exception as e:
+                logger.warning(f"Failed to get count for DS {ds_id}: {e}")
+
+            # 3. Get Min (OrderBy Result Asc, Top 1)
+            try:
+                min_params = {"$orderby": "result asc", "$top": 1, "$select": "result"}
+                if time_filter:
+                    min_params["$filter"] = time_filter
+
+                min_resp = requests.get(
+                    obs_base_url, params=min_params, timeout=self._get_timeout()
+                )
+                if min_resp.status_code == 200:
+                    vals = min_resp.json().get("value", [])
+                    if vals:
+                        val = vals[0].get("result")
+                        if isinstance(val, (int, float)):
+                            if global_min is None or val < global_min:
+                                global_min = val
+            except Exception as e:
+                logger.warning(f"Failed to get min for DS {ds_id}: {e}")
+
+            # 4. Get Max (OrderBy Result Desc, Top 1)
+            try:
+                max_params = {"$orderby": "result desc", "$top": 1, "$select": "result"}
+                if time_filter:
+                    max_params["$filter"] = time_filter
+
+                max_resp = requests.get(
+                    obs_base_url, params=max_params, timeout=self._get_timeout()
+                )
+                if max_resp.status_code == 200:
+                    vals = max_resp.json().get("value", [])
+                    if vals:
+                        val = vals[0].get("result")
+                        if isinstance(val, (int, float)):
+                            if global_max is None or val > global_max:
+                                global_max = val
+            except Exception as e:
+                logger.warning(f"Failed to get max for DS {ds_id}: {e}")
+
         return {
-            "station_id": station_id,
-            "time_range": {"start": global_start, "end": global_end},
-            "parameters": parameters_stats,
+            "id": station_id,
             "total_measurements": total_measurements,
-            "data_quality_summary": quality_summary,
+            "statistics": {
+                "min": global_min if global_min is not None else 0,
+                "max": global_max if global_max is not None else 0,
+                "count": total_measurements,
+            },
+            "time_range": {},  # Not calculating simplified global time range for now
+            "parameters": [],  # Required by schema, returning empty for performance
+            "data_quality_summary": {},  # Required by schema (note key name change)
         }
 
     def detect_anomalies(self, series_id, start, end, method, threshold):
