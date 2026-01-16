@@ -73,7 +73,6 @@ def test_alert_evaluator_passive_alert(mock_db_session):
 
     assert mock_db_session.add.called
     alert = mock_db_session.add.call_args[0][0]
-    print(f"DEBUG: Actual Alert Message: '{alert.message}'")
     assert "triggered" in alert.message.lower() or "80" in alert.message
 
     # Evaluate Result - Should NOT Trigger

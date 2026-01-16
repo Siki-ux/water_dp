@@ -41,6 +41,7 @@ def run_computation_task(
             try:
                 resolved_script_id = uuid.UUID(str(script_id))
             except ValueError:
+                # script_id is not a valid UUID, fallback to DB lookup
                 pass
 
         if not resolved_script_id:
@@ -78,7 +79,7 @@ def run_computation_task(
             from app.services.alert_evaluator import AlertEvaluator
 
             evaluator = AlertEvaluator(db)
-            evaluator.evaluate_result(self.request.id, script_id, result)
+            evaluator.evaluate_result(self.request.id, resolved_script_id, result)
 
         return result
     except Exception as e:

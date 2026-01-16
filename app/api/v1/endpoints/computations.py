@@ -357,11 +357,8 @@ def get_computation_status(
 
     from app.core.celery_app import celery_app
 
-    print(f"DEBUG: Checking task {task_id}")
-    print(f"DEBUG: Backend: {celery_app.conf.result_backend}")
 
     task_result = AsyncResult(task_id, app=celery_app)
-    print(f"DEBUG: Celery Status: {task_result.status}, Ready: {task_result.ready()}")
 
     # Check if ready and sync to DB
     if task_result.ready():

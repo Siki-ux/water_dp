@@ -15,7 +15,6 @@ def test_create_alert_definition(client, mock_db_session: Session):
 
         # Assign ID/Timestamps on add
         def add_side_effect(obj):
-            print(f"DEBUG ADD: {type(obj)} {obj}")
             if not getattr(obj, "id", None):
                 import uuid
                 from datetime import datetime
@@ -43,7 +42,6 @@ def test_create_alert_definition(client, mock_db_session: Session):
                 if hasattr(obj, "severity") and getattr(obj, "severity", None) is None:
                     obj.severity = "warning"
 
-                print(f"DEBUG: Assigned ID {obj.id}")
 
         mock_db_session.add.side_effect = add_side_effect
 
@@ -87,7 +85,6 @@ def test_list_alert_definitions(client, mock_db_session: Session):
 
     # Mock Query
     def query_side_effect(model):
-        print(f"DEBUG QUERY: {model}")
         if model == AlertDefinition:
             m = MagicMock()
             m.filter.return_value.all.return_value = [definition]

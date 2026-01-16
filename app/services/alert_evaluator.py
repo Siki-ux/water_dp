@@ -93,21 +93,8 @@ class AlertEvaluator:
             )
 
             for definition in definitions:
-                # Match alert_type with parameter (e.g., threshold_gt vs just checking if parameter implies it)
-                # Currently frontend sets alert_type to 'threshold_gt' or 'threshold_lt'
-                # But we need to know IF this definition applies to THIS parameter
-                # The AlertDefinition model doesn't explicitly store 'parameter' (e.g. 'water_level').
-                # It just has target_id (station) and conditions.
-                # Assuming for now that implicit checking is based on what makes sense,
-                # OR we should have stored parameter in the definition.
-                # For MVP: We will check if the definition seems to apply.
-                # Since we don't have 'parameter' in Definition, we might just evaluate ALL active rules for this station
-                # and let the condition decide?
-                # Frontend sends conditions: {"operator": ">", "value": 50}. It doesn't specify parameter.
-                # Adding a check: IF the definition is intended for this parameter.
-                # Current frontend implementation is limited: it assumes One Metric per Station?
-                # Or maybe we assume the threshold applies to the *primary* metric of the sensor?
-                # Let's proceed with evaluating the value against the condition.
+                # Match alert_type with parameter. Current implementation assumes primary metric
+                # comparison based on target_id (station) and conditions.
 
                 self._evaluate_sensor_definition(definition, value)
 

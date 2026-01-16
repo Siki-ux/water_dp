@@ -669,23 +669,6 @@ def seed_data(db: Session) -> None:
             )
             db.add(dashboard)
             db.commit()
-            logger.info("Seeding Demo Dashboard...")
-            dashboard = Dashboard(
-                project_id=project.id,
-                name="Water Levels Overview",
-                is_public=True,
-                layout_config={"layout": "grid"},
-                widgets=[
-                    {
-                        "type": "chart",
-                        "title": "Main River Level",
-                        "sensor_id": "STATION_1",
-                    },
-                    {"type": "map", "title": "Region Map"},
-                ],
-            )
-            db.add(dashboard)
-            db.commit()
         # Seed Computation Script (Run regardless of project creation status, just needs project to exist)
         if project:
             logger.info("Seeding Computation Script...")
@@ -760,7 +743,6 @@ def seed_data(db: Session) -> None:
         # PART 4: Advanced Scenarios & Simulator Setup
         # -------------------------------------------------------------------------
         logger.info("[SEEDING] Starting Part 4: Advanced Scenarios & Simulator")
-        seed_advanced_logic(db)
         seed_advanced_logic(db)
         seed_simulator_entities()  # Ensure simulator entities are seeded if needed
 

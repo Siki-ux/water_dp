@@ -80,16 +80,7 @@ class ComputationContext:
     def _persist_alert(self, message: str, details: Dict[str, Any], severity: str):
         """
         Internal: Save alert to DB linking to the Script (Definition target).
-        We need to find an Active AlertDefinition for this script to link it to.
-        If multiple exist, we might need a specific 'rule name' or just pick the first.
-        For simplicity, we look for a generic "Script Logic" definition or create a transient one?
-
-        Better approach: The USER defines a Rule "Flood Prediction Failure".
-        The script says ctx.alert("Flood predicted!").
-        We need to match this to a Definition.
-
-        Option A: Explicit Rule ID in params? No, too hard.
-        Option B: Find ANY definition targeting this script ID.
+        Lookup logic finds active AlertDefinitions targeting this script ID.
         """
         try:
             # Find definitions that target this script
