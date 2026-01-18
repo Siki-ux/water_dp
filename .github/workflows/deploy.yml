@@ -105,6 +105,7 @@ jobs:
           host: ${{ secrets.AZURE_VM_HOST }}
           username: ${{ secrets.AZURE_VM_USERNAME }}
           password: ${{ secrets.AZURE_VM_PASSWORD }}
+          command_timeout: 30m
           script: |
             cd ~/water_dp
             
@@ -121,8 +122,8 @@ jobs:
             # Remove all unused volumes
             docker volume prune -f
             
-            # Pull latest images
-            docker-compose -f docker-compose.prod.yml pull
+            # Pull latest images (Quietly to avoid log spam)
+            docker-compose -f docker-compose.prod.yml pull --quiet
             
             # Start services
             docker-compose -f docker-compose.prod.yml up -d
