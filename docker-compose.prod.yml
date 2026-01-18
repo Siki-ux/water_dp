@@ -326,9 +326,7 @@ services:
     env_file:
       - timeio.env
     healthcheck:
-      test: [ "CMD-SHELL", "true" ]
-      interval: 10s
-      start_period: 5s
+      test: [ "NONE" ]
     environment:
       - DB_URL=postgresql://postgres:${DATABASE_PASSWORD:-postgres}@postgres/water_data
       - DB_SCHEMA=public
