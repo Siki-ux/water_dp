@@ -26,27 +26,34 @@ fi
 echo "Found timeIO-client UUID: $CLIENT_ID"
 
 # Create Protocol Mapper
+# Helper function to delete mapper by name
+delete_mapper_by_name() {
+    local MAPPER_NAME=$1
+    echo "Checking for mapper: $MAPPER_NAME"
+    
+    # Get all mappers with ID and Name in CSV
+    # output format: id,name
+    /opt/keycloak/bin/kcadm.sh get clients/$CLIENT_ID/protocol-mappers/models -r timeio --fields id,name --format csv --noquotes | while IFS=, read -r id name; do
+        # Trim whitespace just in case
+        id=$(echo "$id" | xargs)
+        name=$(echo "$name" | xargs)
+        
+        if [ "$name" == "$MAPPER_NAME" ]; then
+            echo "Found mapper '$name' with ID: $id. Deleting..."
+            /opt/keycloak/bin/kcadm.sh delete clients/$CLIENT_ID/protocol-mappers/models/$id -r timeio
+        fi
+    done
+}
+
+# --------------------------------------------------------------------------------
+# Create eduperson-entitlement-mapper
+# --------------------------------------------------------------------------------
 echo "Configuring eduperson-entitlement-mapper..."
 
-# Check if mapper exists and delete it (hyphenated name)
-MAPPER_IDS=$(/opt/keycloak/bin/kcadm.sh get clients/$CLIENT_ID/protocol-mappers/models -r timeio -q name=eduperson-entitlement-mapper --fields id --format csv --noquotes)
-if [ ! -z "$MAPPER_IDS" ]; then
-    echo "Mapper(s) exist. Deleting..."
-    for id in $MAPPER_IDS; do
-        echo "Deleting mapper with ID: $id"
-        /opt/keycloak/bin/kcadm.sh delete clients/$CLIENT_ID/protocol-mappers/models/$id -r timeio
-    done
-fi
-
-# Check for conflicting mapper (underscore name) and delete it
-CONFLICT_MAPPER_IDS=$(/opt/keycloak/bin/kcadm.sh get clients/$CLIENT_ID/protocol-mappers/models -r timeio -q name=eduperson_entitlement --fields id --format csv --noquotes)
-if [ ! -z "$CONFLICT_MAPPER_IDS" ]; then
-    echo "Conflicting mapper(s) exist. Deleting..."
-    for id in $CONFLICT_MAPPER_IDS; do
-       echo "Deleting conflicting mapper with ID: $id"
-       /opt/keycloak/bin/kcadm.sh delete clients/$CLIENT_ID/protocol-mappers/models/$id -r timeio
-    done
-fi
+# Delete existing (hyphenated)
+delete_mapper_by_name "eduperson-entitlement-mapper"
+# Delete conflicting (underscore)
+delete_mapper_by_name "eduperson_entitlement"
 
 echo "Creating new eduperson-entitlement-mapper..."
 /opt/keycloak/bin/kcadm.sh create clients/$CLIENT_ID/protocol-mappers/models -r timeio -f - << EOF
@@ -66,19 +73,11 @@ echo "Creating new eduperson-entitlement-mapper..."
 }
 EOF
 
-
 # --------------------------------------------------------------------------------
 # Create eduperson_unique_id mapper (username)
 # --------------------------------------------------------------------------------
 echo "Configuring eduperson_unique_id mapper..."
-MAPPER_IDS=$(/opt/keycloak/bin/kcadm.sh get clients/$CLIENT_ID/protocol-mappers/models -r timeio -q name=eduperson_unique_id --fields id --format csv --noquotes)
-if [ ! -z "$MAPPER_IDS" ]; then
-    echo "Mapper(s) exist. Deleting..."
-    for id in $MAPPER_IDS; do
-        echo "Deleting mapper with ID: $id"
-        /opt/keycloak/bin/kcadm.sh delete clients/$CLIENT_ID/protocol-mappers/models/$id -r timeio
-    done
-fi
+delete_mapper_by_name "eduperson_unique_id"
 
 /opt/keycloak/bin/kcadm.sh create clients/$CLIENT_ID/protocol-mappers/models -r timeio -f - << EOF
 {
@@ -100,14 +99,7 @@ EOF
 # Create eduperson_principal_name mapper (email)
 # --------------------------------------------------------------------------------
 echo "Configuring eduperson_principal_name mapper..."
-MAPPER_IDS=$(/opt/keycloak/bin/kcadm.sh get clients/$CLIENT_ID/protocol-mappers/models -r timeio -q name=eduperson_principal_name --fields id --format csv --noquotes)
-if [ ! -z "$MAPPER_IDS" ]; then
-    echo "Mapper(s) exist. Deleting..."
-    for id in $MAPPER_IDS; do
-        echo "Deleting mapper with ID: $id"
-        /opt/keycloak/bin/kcadm.sh delete clients/$CLIENT_ID/protocol-mappers/models/$id -r timeio
-    done
-fi
+delete_mapper_by_name "eduperson_principal_name"
 
 /opt/keycloak/bin/kcadm.sh create clients/$CLIENT_ID/protocol-mappers/models -r timeio -f - << EOF
 {
