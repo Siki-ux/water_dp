@@ -593,6 +593,7 @@ def seed_data(db: Session) -> None:
                 name="Demo Project",
                 description="A sample project showing water levels.",
                 owner_id=DEMO_USER_ID,
+                authorization_provider_group_id="UFZ-TSM:MyProject",
             )
             db.add(project)
             db.commit()

@@ -26,7 +26,7 @@
   "oauth2DeviceCodeLifespan": 600,
   "oauth2DevicePollingInterval": 5,
   "enabled": true,
-  "sslRequired": "external",
+  "sslRequired": "none",
   "registrationAllowed": true,
   "registrationEmailAsUsername": false,
   "rememberMe": false,
@@ -103,7 +103,7 @@
     "xRobotsTag": "none",
     "xFrameOptions": "SAMEORIGIN",
     "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self'; object-src 'none';",
-    "strictTransportSecurity": "max-age=31536000; includeSubDomains"
+    "strictTransportSecurity": ""
   },
   "smtpServer": {},
   "eventsEnabled": false,
@@ -158,12 +158,7 @@
         }
       ],
       "realmRoles": [
-        "default-roles-timeio",
-        "offline_access",
-        "uma_authorization"
-      ],
-      "groups": [
-        "/UFZ-TSM:MyProject"
+        "default-roles-timeio"
       ]
     },
     {
@@ -182,12 +177,7 @@
         }
       ],
       "realmRoles": [
-        "default-roles-timeio",
-        "offline_access",
-        "uma_authorization"
-      ],
-      "groups": [
-        "/UFZ-TSM:MyProject"
+        "default-roles-timeio"
       ]
     },
     {
@@ -208,9 +198,6 @@
       "realmRoles": [
         "default-roles-timeio",
         "admin"
-      ],
-      "groups": [
-        "/UFZ-TSM:MyProject"
       ]
     }
   ],
@@ -226,14 +213,18 @@
         "http://localhost:8080/*",
         "http://localhost:8082/*",
         "http://localhost:3000/*",
-        "http://localhost:8081/*"
+        "http://localhost:8081/*",
+        "http://hydro-portal.westeurope.cloudapp.azure.com/*",
+        "http://hydro-portal.westeurope.cloudapp.azure.com:8000/*",
+        "http://hydro-portal.westeurope.cloudapp.azure.com:8081/*",
+        "http://hydro-portal.westeurope.cloudapp.azure.com:8082/*"
       ],
       "webOrigins": [
         "+"
       ],
       "protocolMappers": [
         {
-          "name": "eduperson_entitlement",
+          "name": "groups",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-group-membership-mapper",
           "consentRequired": false,
@@ -241,7 +232,7 @@
             "full.path": "false",
             "id.token.claim": "true",
             "access.token.claim": "true",
-            "claim.name": "eduperson_entitlement",
+            "claim.name": "groups",
             "userinfo.token.claim": "true"
           }
         },
@@ -268,6 +259,20 @@
             "id.token.claim": "true",
             "access.token.claim": "true",
             "claim.name": "eduperson_principal_name",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "eduperson-entitlement-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "eduperson_entitlement",
+            "claim.value": "[\"urn:geant:params:group:UFZ-TSM:MyProject\"]",
+            "jsonType.label": "JSON",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
             "userinfo.token.claim": "true"
           }
         }

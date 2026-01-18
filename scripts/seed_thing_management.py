@@ -31,15 +31,26 @@ if "localhost" in FROST_URL:
 def patch_db(cursor, db_connection):
     logger.info("Checking/Applying Database Patch...")
     try:
-        # Check if already patched
+        # 1. Check if already patched (project_tbl exists)
         cursor.execute("SELECT to_regclass('project_tbl')")
         if cursor.fetchone()["to_regclass"]:
             logger.info("Database already patched (project_tbl exists).")
             return
 
+        # 2. Check if the 'project' table actually exists as a BASE TABLE to be renamed
+        # This prevents errors on fresh DBs where Flyway hasn't run or tables don't exist yet
+        cursor.execute("""
+            SELECT count(*) 
+            FROM information_schema.tables 
+            WHERE table_name = 'project' AND table_type = 'BASE TABLE'
+        """)
+        if cursor.fetchone()["count"] == 0:
+            logger.warning("Table 'project' not found as a base table. Skipping patching (It might be a fresh DB or handled by Flyway).")
+            return
+
         logger.info("Renaming 'project' table to 'project_tbl'...")
         cursor.execute('ALTER TABLE "project" RENAME TO "project_tbl"')
-
+        # ... rest of logic remains if it existed ...
         logger.info("Dropping NOT NULL constraint on 'mqtt_id'...")
         cursor.execute('ALTER TABLE "project_tbl" ALTER COLUMN "mqtt_id" DROP NOT NULL')
 
@@ -56,7 +67,9 @@ def patch_db(cursor, db_connection):
     except Exception as e:
         db_connection.rollback()
         logger.error(f"Failed to patch database: {e}")
-        raise
+        # On fresh installs, failing to patch might be expected if flyway hasn't run.
+        # We don't want to crash the whole seeder if we are just "Too Early".
+        logger.info("Continuing anyway...")
 
 
 def import_sensors(cursor, db_connection, project_id, user_id):
@@ -199,16 +212,39 @@ def import_sensors(cursor, db_connection, project_id, user_id):
 def run_seed():
     logger.info("Starting raw SQL seeding process...")
 
-    # 1. Init DB
-    try:
-        db = DBConnection()
-        cursor = db.get_cursor()
+    # 1. Init DB with Retries for Schema Readiness
+    max_retries = 20
+    retry_delay = 5
+    db = None
+    
+    for attempt in range(max_retries):
+        try:
+            db = DBConnection()
+            cursor = db.get_cursor()
+            
+            # Check if the 'user' table exists (indicates migrations are done)
+            cursor.execute("SELECT to_regclass('\"user\"')")
+            if cursor.fetchone()["to_regclass"]:
+                logger.success("Database schema detected. Proceeding with seeding.")
+                break
+            else:
+                logger.warning(f"Table 'user' not found yet (Attempt {attempt+1}/{max_retries}). Waiting for migrations...")
+        except Exception as e:
+            logger.warning(f"Database connection failed (Attempt {attempt+1}/{max_retries}): {e}")
+        
+        if attempt < max_retries - 1:
+            time.sleep(retry_delay)
+        else:
+            logger.error("Database schema never became ready. Exiting.")
+            return
 
+    try:
+        cursor = db.get_cursor()
         # Apply Patch First
         patch_db(cursor, db.db_connection)
 
     except Exception as e:
-        logger.error(f"Failed to connect/patch DB: {e}")
+        logger.error(f"Failed to patch DB: {e}")
         return
 
     # User ID for creation (admin-siki)
@@ -245,20 +281,21 @@ def run_seed():
             first_user = cursor.fetchone()
             user_id = first_user["id"] if first_user else 1
 
-    group_name = "MyProject"
+    project_name = "MyProject"
+    group_id = "UFZ-TSM:MyProject"
     project_uuid = str(uuid.uuid4())
     project_id = None
 
     # Check if project exists (In View or Table)
-    cursor.execute('SELECT id FROM "project" WHERE name = %s', (group_name,))
+    cursor.execute('SELECT id FROM "project" WHERE name = %s', (project_name,))
     row = cursor.fetchone()
     if row:
         logger.info(
-            f"Project '{group_name}' already exists (ID: {row['id']}). Skipping creation."
+            f"Project '{project_name}' already exists (ID: {row['id']}). Skipping creation."
         )
         project_id = row["id"]
     else:
-        logger.info(f"Creating Project '{group_name}' via raw SQL...")
+        logger.info(f"Creating Project '{project_name}' via raw SQL...")
 
         # Generate credentials
         db_schema = f"project_{get_random_chars(8).lower()}"
@@ -287,8 +324,8 @@ def run_seed():
 
             # 3. Insert Project (Into View)
             cursor.execute(
-                'INSERT INTO "project" ("uuid", "database_id", "name") VALUES (%s, %s, %s) RETURNING id',
-                (project_uuid, database_id, group_name),
+                'INSERT INTO "project" ("uuid", "database_id", "name", "authorization_provider_group_id") VALUES (%s, %s, %s, %s) RETURNING id',
+                (project_uuid, database_id, project_name, group_id),
             )
             project_row = cursor.fetchone()
             project_id = project_row["id"]
@@ -300,7 +337,7 @@ def run_seed():
             )
 
             db.db_connection.commit()
-            logger.success(f"Created Project '{group_name}' with ID: {project_id}")
+            logger.success(f"Created Project '{project_name}' with ID: {project_id}")
 
         except Exception as e:
             db.db_connection.rollback()

@@ -25,9 +25,9 @@ class ProjectService:
         """Check if user has admin role."""
         realm_access = user.get("realm_access", {})
         roles = realm_access.get("roles", [])
-        return (
-            "admin" in roles or "admin-siki" in roles
-        )  # Handle potential custom roles
+        is_admin = "admin" in roles
+        logger.info(f"User roles: {roles}, is_admin: {is_admin}")
+        return is_admin
 
     @staticmethod
     def _check_access(
@@ -45,14 +45,40 @@ class ProjectService:
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
-        # 1. Admin Access
         if ProjectService._is_admin(user):
+            logger.info(f"Admin access granted for project {project_id}")
             return project
 
         user_id = user.get("sub")
+        logger.info(f"Checking access for user {user_id} on project {project_id}. Owner: {project.owner_id}")
 
-        # 2. Owner Access
+        # 1. Owner Access
         if str(project.owner_id) == str(user_id):
+            logger.info("Access granted as owner")
+            return project
+
+        # 2. Group Access (Keycloak Groups)
+        user_groups = user.get("groups", [])
+        if not isinstance(user_groups, list):
+            user_groups = [user_groups]
+        
+        # Add entitlements and roles as fallback (matching list_projects logic)
+        user_groups.extend(user.get("eduperson_entitlement", []) if isinstance(user.get("eduperson_entitlement"), list) else [user.get("eduperson_entitlement")] if user.get("eduperson_entitlement") else [])
+        user_groups.extend(user.get("realm_access", {}).get("roles", []))
+
+        # Sanitize
+        sanitized_groups = []
+        for g in user_groups:
+            if g:
+                g_str = str(g)
+                if g_str.startswith("urn:geant:params:group:"):
+                    g_str = g_str.replace("urn:geant:params:group:", "")
+                if g_str.startswith("/"):
+                    g_str = g_str[1:]
+                sanitized_groups.append(g_str)
+        
+        if project.authorization_provider_group_id and project.authorization_provider_group_id in sanitized_groups:
+            logger.info(f"Access granted via group: {project.authorization_provider_group_id}")
             return project
 
         # 3. Member Access
@@ -66,9 +92,12 @@ class ProjectService:
         )
 
         if not member:
+            logger.warning(f"User {user_id} is not a member of project {project_id}")
             raise HTTPException(
                 status_code=403, detail="Not authorized to access this project"
             )
+
+        logger.info(f"User {user_id} access granted as member with role {member.role}")
 
         # Check Role Hierarchy
         # viewer allowed: viewer, editor
@@ -145,23 +174,60 @@ class ProjectService:
     def list_projects(
         db: Session, user: Dict[str, Any], skip: int = 0, limit: int = 100
     ) -> List[Project]:
-        if ProjectService._is_admin(user):
-            return db.query(Project).offset(skip).limit(limit).all()
+        is_admin = ProjectService._is_admin(user)
+        logger.info(f"Listing projects. User: {user.get('preferred_username')}, is_admin: {is_admin}")
+
+        if is_admin:
+            all_projects = db.query(Project).offset(skip).limit(limit).all()
+            logger.info(f"Admin listing all {len(all_projects)} projects")
+            return all_projects
 
         user_id = str(user.get("sub"))
+        
+        # Collect all group/role-like claims
+        user_groups = user.get("groups", [])
+        if not isinstance(user_groups, list):
+            user_groups = [user_groups]
+            
+        # Add entitlements (Keycloak groups often mapped here)
+        entitlements = user.get("eduperson_entitlement", [])
+        if isinstance(entitlements, list):
+            user_groups.extend(entitlements)
+        else:
+            user_groups.append(entitlements)
+            
+        # Add realm roles as fallback
+        realm_roles = user.get("realm_access", {}).get("roles", [])
+        user_groups.extend(realm_roles)
 
-        # Query projects where user is owner OR member
-        # Using union or simple OR condition
+        # Sanitize: strip leading "/" and remove duplicates/None
+        sanitized_groups = []
+        for g in user_groups:
+            if g:
+                g_str = str(g)
+                if g_str.startswith("urn:geant:params:group:"):
+                    g_str = g_str.replace("urn:geant:params:group:", "")
+                if g_str.startswith("/"):
+                    g_str = g_str[1:]
+                sanitized_groups.append(g_str)
+        
+        user_groups = list(set(sanitized_groups))
+        logger.info(f"User claims for filtering: {user_groups}")
 
         # Subquery for member project IDs
         member_project_ids = select(ProjectMember.project_id).where(
             ProjectMember.user_id == user_id
         )
 
+        # Filters: Owner OR Member OR Group Match
         projects = (
             db.query(Project)
             .filter(
-                or_(Project.owner_id == user_id, Project.id.in_(member_project_ids))
+                or_(
+                    Project.owner_id == user_id,
+                    Project.id.in_(member_project_ids),
+                    Project.authorization_provider_group_id.in_(user_groups),
+                )
             )
             .offset(skip)
             .limit(limit)

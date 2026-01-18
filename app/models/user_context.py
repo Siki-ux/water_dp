@@ -46,6 +46,9 @@ class Project(Base, BaseModel):
     # Additional properties (e.g. external IDs)
     properties = Column(JSONB, nullable=True)
 
+    # Keycloak Group mapping for authorization
+    authorization_provider_group_id = Column(String(255), nullable=True, index=True)
+
     # Relationships
     dashboards = relationship(
         "Dashboard", back_populates="project", cascade="all, delete-orphan"

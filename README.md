@@ -440,6 +440,30 @@ The platform is designed as a **Trusted Research/Internal Workspace**, which inf
    - **Admin User**: `admin-siki` / `admin-password` (Full API access)
    - **Frontend User**: `frontendbus` / `frontend-password` (Limited access)
 
+### Azure VM Deployment
+
+To deploy this platform to an Azure VM (or any cloud VPS), follow these steps to ensure networking and OIDC redirects work correctly.
+
+1.  **Export Hostname Variables**:
+    On your VM, set the public DNS or IP before starting Docker:
+    ```bash
+    export PUBLIC_HOSTNAME=your-vm.cloudapp.azure.com
+    export KEYCLOAK_EXTERNAL_URL=http://your-vm.cloudapp.azure.com:8081
+    ```
+
+2.  **Align File Configuration**:
+    Ensure `docker-compose.yml` and `timeio.env` are synced with the latest changes that use `${PUBLIC_HOSTNAME}` and `${KEYCLOAK_EXTERNAL_URL}`.
+
+3.  **Start Services**:
+    ```bash
+    docker-compose up -d --build
+    ```
+
+4.  **Hardware Requirements**:
+    - **Minimum**: 4GB RAM (Standard_B2s)
+    - **Recommended**: 8GB RAM (Standard_B2ms)
+    - **Storage**: 30GB+ standard SSD.
+
 ### Verification
 To verify that the entire stack is working correctly (Layers, Features, Data Linkage, and Time Series content), run the included verification script:
 

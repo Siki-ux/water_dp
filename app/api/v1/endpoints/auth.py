@@ -35,6 +35,8 @@ async def login_for_access_token(
     }
 
     # Optional: Add client_secret if your client is not public
+    logger.info(f"Proxying token request to: {token_url}")
+    logger.info(f"Payload (no pass): {{k:v for k,v in payload.items() if k!='password'}}")
 
     try:
         async with httpx.AsyncClient() as client:
@@ -43,6 +45,7 @@ async def login_for_access_token(
                 data=payload,
                 timeout=10.0,
             )
+            logger.info(f"Keycloak response: {response.status_code}")
 
             if response.status_code != 200:
                 logger.error(

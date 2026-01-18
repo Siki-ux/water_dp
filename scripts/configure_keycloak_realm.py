@@ -111,34 +111,100 @@ for client in data["clients"]:
         client_found = True
         client["standardFlowEnabled"] = True
         client["directAccessGrantsEnabled"] = True
-        # Restrict to explicit localhost ports for security
-        client["redirectUris"] = [
+        public_hostname = os.getenv("PUBLIC_HOSTNAME")
+        base_uris = [
             "http://localhost:8000/*",  # FastAPI
             "http://localhost:8080/*",  # GeoServer
             "http://localhost:8082/*",  # Thing Management
             "http://localhost:3000/*",  # Grafana
             "http://localhost:8081/*",  # Keycloak
         ]
+        if public_hostname:
+            base_uris.extend([
+                f"http://{public_hostname}/*",
+                f"http://{public_hostname}:8000/*",
+                f"http://{public_hostname}:8081/*",
+                f"http://{public_hostname}:8082/*",
+            ])
+        
+        client["redirectUris"] = base_uris
         client["webOrigins"] = ["+"]  # Allow origins matching redirect URIs
-        print("Updated existing timeIO-client configuration.")
+        print(f"Updated existing timeIO-client configuration with {len(client['redirectUris'])} URIs.")
 
 if not client_found:
     print("timeIO-client not found. Creating it...")
+    public_hostname = os.getenv("PUBLIC_HOSTNAME")
+    base_uris = [
+        "http://localhost:8000/*",
+        "http://localhost:8080/*",
+        "http://localhost:8082/*",
+        "http://localhost:3000/*",
+        "http://localhost:8081/*",
+    ]
+    if public_hostname:
+        base_uris.extend([
+            f"http://{public_hostname}/*",
+            f"http://{public_hostname}:8000/*",
+            f"http://{public_hostname}:8081/*",
+            f"http://{public_hostname}:8082/*",
+        ])
+    
     new_client = {
         "clientId": "timeIO-client",
         "enabled": True,
         "publicClient": True,
         "standardFlowEnabled": True,
         "directAccessGrantsEnabled": True,
-        "redirectUris": [
-            "http://localhost:8000/*",
-            "http://localhost:8080/*",
-            "http://localhost:8082/*",
-            "http://localhost:3000/*",
-            "http://localhost:8081/*",
-        ],
+        "redirectUris": base_uris,
         "webOrigins": ["+"],
     }
+
+# Define the mapper
+mapper = {
+    "name": "eduperson-entitlement-mapper",
+    "protocol": "openid-connect",
+    "protocolMapper": "oidc-hardcoded-claim-mapper",
+    "consentRequired": False,
+    "config": {
+        "claim.name": "eduperson_entitlement",
+        "claim.value": "[\"urn:geant:params:group:UFZ-TSM:MyProject\"]",
+        "jsonType.label": "JSON",
+        "id.token.claim": "true",
+        "access.token.claim": "true",
+        "userinfo.token.claim": "true"
+    }
+}
+
+# Helper function to add mapper if missing and remove conflicting ones
+def ensure_mapper(client_data):
+    if "protocolMappers" not in client_data:
+        client_data["protocolMappers"] = []
+    
+    # Remove conflicting mapper (underscore)
+    client_data["protocolMappers"] = [
+        m for m in client_data["protocolMappers"] 
+        if m.get("name") != "eduperson_entitlement"
+    ]
+    
+    mapper_exists = False
+    for m in client_data["protocolMappers"]:
+        if m.get("name") == mapper["name"]:
+            mapper_exists = True
+            break
+    
+    if not mapper_exists:
+        client_data["protocolMappers"].append(mapper)
+        print(f"Added {mapper['name']} to timeIO-client.")
+
+if client_found:
+    # We need to find the client again to modify it
+    for client in data["clients"]:
+        if client.get("clientId") == "timeIO-client":
+            ensure_mapper(client)
+            break
+else:
+    # Apply to new_client
+    ensure_mapper(new_client)
     data["clients"].append(new_client)
     print("Created timeIO-client configuration.")
 

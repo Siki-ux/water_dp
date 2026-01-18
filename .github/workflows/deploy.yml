@@ -1,0 +1,120 @@
+name: Deploy to Azure VM
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  packages: write
+  contents: read
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - service: api
+            image: water_dp_api
+            context: .
+            dockerfile: Dockerfile
+          - service: worker
+            image: water_dp_worker
+            context: .
+            dockerfile: Dockerfile
+          - service: simulator
+            image: water_dp_simulator
+            context: .
+            dockerfile: Dockerfile
+          - service: tm_migrations
+            image: water_dp_tm_migrations
+            context: .
+            dockerfile: docker/migrations.Dockerfile
+          - service: tm_seeder
+            image: water_dp_tm_seeder
+            context: .
+            dockerfile: docker/seeder.Dockerfile
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Downcase REPO
+        run: |
+          echo "REPO=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ghcr.io/${{ env.REPO }}/${{ matrix.image }}:latest
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Downcase REPO
+        run: |
+          echo "REPO=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
+
+      - name: Generate .env file for Prod
+        run: |
+          echo "DATABASE_USER=postgres" >> .env
+          echo "DATABASE_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" >> .env
+          # Use the same password for MinIO if not provided primarily
+          echo "OBJECT_STORAGE_ROOT_USER=minioadmin" >> .env
+          echo "OBJECT_STORAGE_ROOT_PASSWORD=${{ secrets.MINIO_PASSWORD }}" >> .env
+          
+          echo "SECRET_KEY=${{ secrets.SECRET_KEY }}" >> .env
+          echo "GEOSERVER_ADMIN_PASSWORD=${{ secrets.GEOSERVER_ADMIN_PASSWORD }}" >> .env
+          
+          echo "KEYCLOAK_ADMIN_PASSWORD=${{ secrets.KEYCLOAK_ADMIN_PASSWORD }}" >> .env
+          echo "MQTT_PASSWORD=${{ secrets.MQTT_PASSWORD }}" >> .env
+          
+          echo "PUBLIC_HOSTNAME=${{ secrets.AZURE_VM_HOST }}" >> .env
+          echo "KEYCLOAK_EXTERNAL_URL=http://${{ secrets.AZURE_VM_HOST }}:8081" >> .env
+          echo "GITHUB_REPOSITORY_LOWER=${{ env.REPO }}" >> .env
+
+
+      - name: Copy files to VM
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.AZURE_VM_HOST }}
+          username: ${{ secrets.AZURE_VM_USERNAME }}
+          password: ${{ secrets.AZURE_VM_PASSWORD }}
+          source: "docker-compose.prod.yml,.env,mosquitto.conf,nginx_proxy_api.conf,timeio.env,keycloak/import,scripts/setup_keycloak.sh"
+          target: "~/water_dp"
+
+      - name: Deploy on VM
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.AZURE_VM_HOST }}
+          username: ${{ secrets.AZURE_VM_USERNAME }}
+          password: ${{ secrets.AZURE_VM_PASSWORD }}
+          script: |
+            cd ~/water_dp
+            
+            # Login to GHCR to pull private images
+            echo ${{ secrets.GHCR_PAT }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            
+            # Reset environment (Delete volumes)
+            docker-compose -f docker-compose.prod.yml down -v
+            
+            # Pull latest images
+            docker-compose -f docker-compose.prod.yml pull
+            
+            # Start services
+            docker-compose -f docker-compose.prod.yml up -d

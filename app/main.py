@@ -97,6 +97,10 @@ app = FastAPI(
     servers=[
         {"url": "http://localhost:8000", "description": "Development server"},
         {
+            "url": "http://hydro-portal.westeurope.cloudapp.azure.com:8000",
+            "description": "Azure VM server",
+        },
+        {
             "url": "https://api.waterdataplatform.com",
             "description": "Production server",
         },
@@ -106,6 +110,7 @@ app = FastAPI(
 
 app.add_middleware(ErrorHandlingMiddleware)
 
+logger.info(f"CORS origins: {settings.cors_origins_list}")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,

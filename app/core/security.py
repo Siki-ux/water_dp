@@ -73,19 +73,42 @@ async def verify_token(token: str) -> Dict[str, Any]:
             )
 
         # 3. Verify Token
+        # We allow multiple issuers (internal and external) to handle Docker networking
+        valid_issuers = [
+            f"{settings.keycloak_url}/realms/{settings.keycloak_realm}",
+            f"http://keycloak:8080/realms/{settings.keycloak_realm}",
+            f"http://localhost:8081/realms/{settings.keycloak_realm}",
+            f"http://localhost:8080/realms/{settings.keycloak_realm}",
+            f"http://hydro-portal.westeurope.cloudapp.azure.com:8081/realms/{settings.keycloak_realm}",
+            f"http://hydro-portal.westeurope.cloudapp.azure.com:8080/realms/{settings.keycloak_realm}",
+        ]
+        if settings.keycloak_external_url:
+            valid_issuers.append(
+                f"{settings.keycloak_external_url}/realms/{settings.keycloak_realm}"
+            )
+
         payload = jwt.decode(
             token,
             rsa_key,
             algorithms=["RS256"],
-            audience="account",  # Keycloak defaults usually verify against 'account' or specific client audience
-            issuer=f"{settings.keycloak_url}/realms/{settings.keycloak_realm}",
+            audience="account",
             options={
-                # WARNING: Audience verification is disabled to support complex Keycloak configurations.
-                # This is a known risk acceptance. Ensure issuer and signature verification are strict.
-                "verify_aud": False
+                "verify_aud": False,
+                "verify_iss": False,  # We check issuer manually below
             },
         )
 
+        iss = payload.get("iss")
+        if iss not in valid_issuers:
+            logger.warning(f"Invalid issuer: {iss}. Expected one of {valid_issuers}")
+            logger.debug(f"Unverified payload: {payload}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Invalid token issuer: {iss}",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        logger.info(f"Token verified for user: {payload.get('preferred_username', payload.get('sub'))}")
         return payload
 
     except JWTError as e:

@@ -1,18 +1,15 @@
-# version line removed (obsolete)
-
 services:
-  # PostgreSQL Database
   # PostgreSQL Database (TimescaleDB + PostGIS)
   postgres:
     image: timescale/timescaledb-ha:pg15
     container_name: water_dp_postgres
+    restart: unless-stopped
     environment:
       POSTGRES_DB: water_data
       POSTGRES_USER: ${DATABASE_USER:-postgres}
       POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-postgres}
       TS_TUNE_MEMORY: "512MB"
       TS_TUNE_NUM_CPUS: "2"
-    # Removed public port 5432 exposure for security
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d water_data" ]
       interval: 5s
@@ -21,7 +18,6 @@ services:
       start_period: 60s
     volumes:
       - postgres_data_ts:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - water_dp_network
 
@@ -29,20 +25,20 @@ services:
   redis:
     image: redis:7-alpine
     container_name: water_dp_redis
-    # Removed public port 6379 exposure for security
+    restart: unless-stopped
     volumes:
       - redis_data:/data
     networks:
       - water_dp_network
 
-  # Object Storage (MinIO) - Required for TimeIO
+  # Object Storage (MinIO)
   minio:
     image: minio/minio:RELEASE.2024-01-13T07-53-03Z
     container_name: water_dp_minio
+    restart: unless-stopped
     environment:
       MINIO_ROOT_USER: ${OBJECT_STORAGE_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${OBJECT_STORAGE_ROOT_PASSWORD:-minioadmin}
-    # Removed public port 9000/9001 exposure for security
     volumes:
       - minio_data:/data
     command: server /data --console-address ":9001"
@@ -53,6 +49,7 @@ services:
   geoserver:
     image: kartoza/geoserver:2.22.1
     container_name: water_dp_geoserver
+    restart: unless-stopped
     environment:
       - GEOSERVER_ADMIN_PASSWORD=${GEOSERVER_ADMIN_PASSWORD:-geoserver}
       - GEOSERVER_ADMIN_USER=${GEOSERVER_ADMIN_USER:-admin}
@@ -77,15 +74,16 @@ services:
 
   # Water Data Platform API
   api:
-    build: .
+    image: ghcr.io/${GITHUB_REPOSITORY_LOWER}/water_dp_api:latest
     container_name: water_dp_api
+    restart: unless-stopped
     environment:
       - APP_NAME=Water Data Platform
-      - DEBUG=true
+      - DEBUG=false
       - SEEDING=true
       - VERSION=1.0.0
       - API_PREFIX=/api/v1
-      - CORS_ORIGINS=["http://localhost","http://localhost:80","http://localhost:3000","http://localhost:3001","http://localhost:8080","http://localhost:8081","http://localhost:8082","http://localhost:8000","http://localhost:8002","http://hydro-portal.westeurope.cloudapp.azure.com","http://hydro-portal.westeurope.cloudapp.azure.com:8000","http://hydro-portal.westeurope.cloudapp.azure.com:3001","http://water-data-platform.westeurope.cloudapp.azure.com:3001"]
+      - CORS_ORIGINS=["http://localhost","http://hydro-portal.westeurope.cloudapp.azure.com","https://hydro-portal.westeurope.cloudapp.azure.com"]
       - DATABASE_URL=postgresql://${DATABASE_USER:-postgres}:${DATABASE_PASSWORD:-postgres}@postgres:5432/water_data
       - DATABASE_POOL_SIZE=10
       - DATABASE_MAX_OVERFLOW=20
@@ -98,11 +96,11 @@ services:
       - GEOSERVER_WORKSPACE=water_data
       - TIME_ZONE=UTC
       - MAX_TIME_RANGE_DAYS=365
-      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+      - SECRET_KEY=${SECRET_KEY}
       - ACCESS_TOKEN_EXPIRE_MINUTES=30
       - LOG_LEVEL=INFO
       - KEYCLOAK_URL=http://keycloak:8080
-      - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL:-http://${PUBLIC_HOSTNAME:-localhost}:8081}
+      - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL}
       - KEYCLOAK_ADMIN_USERNAME=${KEYCLOAK_ADMIN:-admin}
       - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
       - FROST_URL=http://frost:8080/FROST-Server/v1.1
@@ -113,7 +111,7 @@ services:
       interval: 10s
       timeout: 10s
       retries: 30
-      start_period: 120s
+      start_period: 60s
     depends_on:
       postgres:
         condition: service_healthy
@@ -121,16 +119,15 @@ services:
         condition: service_started
       geoserver:
         condition: service_healthy
-    volumes:
-      - ./app:/app/app
     networks:
       - water_dp_network
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --log-level debug
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   # Celery Worker
   worker:
-    build: .
+    image: ghcr.io/${GITHUB_REPOSITORY_LOWER}/water_dp_worker:latest
     container_name: water_dp_worker
+    restart: unless-stopped
     command: celery -A app.core.celery_app.celery_app worker --loglevel=info -Q imports,computations,celery
     environment:
       - DATABASE_URL=postgresql://${DATABASE_USER:-postgres}:${DATABASE_PASSWORD:-postgres}@postgres:5432/water_data
@@ -143,15 +140,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-    volumes:
-      - ./app:/app/app
     networks:
       - water_dp_network
 
   # Simulator Service (Fake Sensor)
   simulator:
-    build: .
+    image: ghcr.io/${GITHUB_REPOSITORY_LOWER}/water_dp_simulator:latest
     container_name: water_dp_simulator
+    restart: unless-stopped
     command: python -m app.core.simulator
     environment:
       - FROST_URL=http://frost:8080/FROST-Server/v1.1
@@ -161,8 +157,6 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy
-    volumes:
-      - ./app:/app/app
     networks:
       - water_dp_network
 
@@ -172,10 +166,18 @@ services:
   mqtt-broker:
     image: iegomez/mosquitto-go-auth:latest
     container_name: timeio_mqtt
+    restart: unless-stopped
     env_file:
       - timeio.env
     ports:
       - "1883:1883"
+    environment:
+      - MQTT_PASSWORD=${MQTT_PASSWORD:-secure_mqtt_password}
+      - MQTT_INGEST_PASSWORD=${MQTT_PASSWORD:-secure_mqtt_password}
+      - MQTT_AUTH_POSTGRES_PASS=${DATABASE_PASSWORD}
+      - MQTT_AUTH_POSTGRES_USER=${DATABASE_USER}
+      - MQTT_AUTH_POSTGRES_HOST=postgres
+      - MQTT_AUTH_POSTGRES_PORT=5432
     depends_on:
       postgres:
         condition: service_healthy
@@ -184,27 +186,29 @@ services:
     networks:
       - water_dp_network
 
-  # Keycloak (Identity Provider)
+  # Keycloak
   keycloak:
     image: quay.io/keycloak/keycloak:26.4
     container_name: timeio_keycloak
+    restart: unless-stopped
     env_file:
       - timeio.env
     environment:
       - JAVA_OPTS=-Xms256m -Xmx768m
       - KC_BOOTSTRAP_ADMIN_USERNAME=${KEYCLOAK_ADMIN:-admin}
       - KC_BOOTSTRAP_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
-      - KC_HOSTNAME_STRICT_HTTPS=false
-      - KC_HTTP_ENABLED=true
-      - KC_HOSTNAME_STRICT=false
-      # - KC_HOSTNAME=${PUBLIC_HOSTNAME:-localhost}
-      # - KC_HOSTNAME_URL=${KEYCLOAK_EXTERNAL_URL:-http://localhost:8081}
-      # - KC_HOSTNAME_ADMIN_URL=${KEYCLOAK_EXTERNAL_URL:-http://localhost:8081}
+      - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      - KEYCLOAK_DATABASE_HOST=postgres
+      - KEYCLOAK_DATABASE_NAME=water_data
+      - KEYCLOAK_PORT=8081
+      - KEYCLOAK_HTTP_ENABLED=true
+      - KEYCLOAK_HOSTNAME_STRICT_HTTPS=false
+      - KEYCLOAK_HOSTNAME_STRICT=false
     volumes:
       - ./keycloak/import:/opt/keycloak/data/import
     command: start-dev --import-realm --http-port 8080 --hostname-strict=false --http-enabled=true
     ports:
-      # External port 8081 maps to internal Keycloak port 8080
       - "8081:8080"
     depends_on:
       postgres:
@@ -218,13 +222,16 @@ services:
       retries: 60
       start_period: 60s
 
-  # Automation service to disable Keycloak SSL requirement on fresh setup
+  # Keycloak Setup (Fresh setup automation)
   keycloak-setup:
     image: quay.io/keycloak/keycloak:26.4
     container_name: timeio_keycloak_setup
     depends_on:
       keycloak:
         condition: service_healthy
+    environment:
+      - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
     volumes:
       - ./scripts/setup_keycloak.sh:/opt/keycloak/setup_keycloak.sh
     networks:
@@ -236,6 +243,7 @@ services:
   frost:
     image: fraunhoferiosb/frost-server:latest
     container_name: timeio_frost
+    restart: unless-stopped
     env_file:
       - timeio.env
     ports:
@@ -245,7 +253,7 @@ services:
       - serviceRootUrl=http://localhost:8083/FROST-Server
       - plugins_multiDatastream_enable=true
       - http_cors_enable=true
-      - http_cors_allowed_origins=${FROST_HTTP_CORS_ALLOWED_ORIGINS:-http://localhost:8083}
+      - http_cors_allowed_origins=${FROST_HTTP_CORS_ALLOWED_ORIGINS:-*}
       - persistence_db_driver=org.postgresql.Driver
       - persistence_db_url=jdbc:postgresql://postgres:5432/water_data
       - persistence_db_username=${DATABASE_USER:-postgres}
@@ -257,10 +265,11 @@ services:
     networks:
       - water_dp_network
 
-  # Thing Management API (Backend)
+  # Thing Management API
   thing-management-api:
     image: registry.hzdr.de/ufz-tsm/thing-management/backend/thing-management-api:latest
     container_name: timeio_tm_api
+    restart: unless-stopped
     env_file:
       - timeio.env
     ports:
@@ -271,11 +280,15 @@ services:
       - OIDC_CONF_URL=http://keycloak:8080/realms/timeio/.well-known/openid-configuration
       - OIDC_REALM=timeio
       - OIDC_CLIENT_ID=timeIO-client
-      - OIDC_ALLOWED_ISSUERS=["http://localhost:8081/realms/timeio","http://keycloak:8080/realms/timeio","http://${PUBLIC_HOSTNAME}:8081/realms/timeio","http://hydro-portal.westeurope.cloudapp.azure.com:8081/realms/timeio"]
+      - OIDC_ALLOWED_ISSUERS=["http://localhost:8081/realms/timeio","http://keycloak:8080/realms/timeio","${KEYCLOAK_EXTERNAL_URL}/realms/timeio"]
       - OIDC_ALLOWED_AUDIENCES=["timeIO-client","account"]
       - ALLOWED_VOS=UFZ-TSM
       - DB_URL=postgresql://postgres:${DATABASE_PASSWORD:-postgres}@postgres/water_data
       - DB_SCHEMA=public
+      - THING_MANAGEMENT_API_DATABASE_PASS=${DATABASE_PASSWORD}
+      - THING_MANAGEMENT_API_DSN=postgresql://${DATABASE_USER}:${DATABASE_PASSWORD}@postgres/water_data
+      - THING_MANAGEMENT_MQTT_PASS=${MQTT_PASSWORD:-secure_mqtt_password}
+      - OIDC_ADMIN_PASSWORD=${DATABASE_PASSWORD}
     depends_on:
       postgres:
         condition: service_healthy
@@ -285,9 +298,10 @@ services:
         condition: service_healthy
     networks:
       - water_dp_network
-    # Database Migrations (Using local source)
+
+  # Thing Management DB Migrations
   thing-management-db-migrations:
-    image: flyway/flyway:10
+    image: ghcr.io/${GITHUB_REPOSITORY_LOWER}/water_dp_tm_migrations:latest
     container_name: timeio_tm_migrations
     environment:
       - FLYWAY_URL=jdbc:postgresql://postgres:5432/water_data
@@ -298,26 +312,23 @@ services:
       - FLYWAY_BASELINE_ON_MIGRATE=true
       - FLYWAY_BASELINE_VERSION=0
     command: -connectRetries=60 migrate
-    volumes:
-      - ./alembic/versions:/flyway/sql
     depends_on:
       postgres:
         condition: service_healthy
     networks:
       - water_dp_network
 
-  # Thing Management Seeder (Automated Seeding)
+  # Thing Management Seeder
   thing-management-seeder:
-    image: registry.hzdr.de/ufz-tsm/thing-management/backend/thing-management-api:latest
+    image: ghcr.io/${GITHUB_REPOSITORY_LOWER}/water_dp_tm_seeder:latest
     container_name: timeio_tm_seeder
+    restart: "no"
     env_file:
       - timeio.env
     environment:
       - DB_URL=postgresql://postgres:${DATABASE_PASSWORD:-postgres}@postgres/water_data
       - DB_SCHEMA=public
     command: python /app/seed_thing_management.py
-    volumes:
-      - ./scripts/seed_thing_management.py:/app/seed_thing_management.py
     depends_on:
       postgres:
         condition: service_healthy
@@ -327,19 +338,19 @@ services:
         condition: service_healthy
     networks:
       - water_dp_network
-    restart: "no"
 
-  # Thing Management Frontend (UI)
+  # Thing Management Frontend
   thing-management-frontend:
     image: registry.hzdr.de/ufz-tsm/thing-management/frontend/thing-management:latest
     container_name: timeio_tm_frontend
+    restart: unless-stopped
     env_file:
       - timeio.env
     environment:
       - APP_PORT=8080
       - API_URL=/api
       - APP_URL=http://${PUBLIC_HOSTNAME:-localhost}:8082
-      - OIDC_URL=${KEYCLOAK_EXTERNAL_URL:-http://${PUBLIC_HOSTNAME:-localhost}:8081}
+      - OIDC_URL=${KEYCLOAK_EXTERNAL_URL}
       - OIDC_REALM=timeio
       - OIDC_CLIENT_ID=timeIO-client
       - OIDC_REDIRECT_URL=http://${PUBLIC_HOSTNAME:-localhost}:8082/login/callback
@@ -354,26 +365,6 @@ services:
       - ./nginx_proxy_api.conf:/etc/nginx/conf.d/default.conf
     networks:
       - water_dp_network
-  # Visualization (Grafana)
-  # visualization:
-  #   image: grafana/grafana:11.6.1
-  #   container_name: timeio_grafana
-  #   env_file:
-  #     - timeio.env
-  #   ports:
-  #     - "3000:3000"
-  #   environment:
-  #     - GF_SECURITY_ADMIN_USER=${VISUALIZATION_USER}
-  #     - GF_SECURITY_ADMIN_PASSWORD=${VISUALIZATION_PASSWORD}
-  #     - GF_SERVER_ROOT_URL=${VISUALIZATION_PROXY_URL}
-  #     - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #   networks:
-  #     - water_dp_network
-  #   volumes:
-  #     - ./grafana/provisioning:/etc/grafana/provisioning
 
 volumes:
   postgres_data_ts:

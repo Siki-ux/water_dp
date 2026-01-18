@@ -52,6 +52,7 @@ class Settings(BaseSettings):
         default=30, alias="ACCESS_TOKEN_EXPIRE_MINUTES"
     )
     keycloak_url: str = Field(default="http://localhost:8081", alias="KEYCLOAK_URL")
+    keycloak_external_url: Optional[str] = Field(default=None, alias="KEYCLOAK_EXTERNAL_URL")
     keycloak_realm: str = Field(default="timeio", alias="KEYCLOAK_REALM")
     keycloak_client_id: str = Field(default="timeIO-client", alias="KEYCLOAK_CLIENT_ID")
     keycloak_admin_client_id: str = Field(

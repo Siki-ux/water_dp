@@ -68,17 +68,19 @@ class ProjectBase(PydanticBase):
 
 
 class ProjectCreate(ProjectBase):
-    pass
+    authorization_provider_group_id: Optional[str] = None
 
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     description: Optional[str] = None
+    authorization_provider_group_id: Optional[str] = None
 
 
 class ProjectResponse(ProjectBase):
     id: UUID
     owner_id: str
+    authorization_provider_group_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
