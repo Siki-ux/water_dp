@@ -396,3 +396,4 @@ volumes:
 networks:
   water_dp_network:
     driver: bridge
+    name: water_dp_network

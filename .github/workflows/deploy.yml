@@ -105,7 +105,7 @@ jobs:
           host: ${{ secrets.AZURE_VM_HOST }}
           username: ${{ secrets.AZURE_VM_USERNAME }}
           password: ${{ secrets.AZURE_VM_PASSWORD }}
-          command_timeout: 30m
+          command_timeout: 60m
           script: |
             cd ~/water_dp
             
