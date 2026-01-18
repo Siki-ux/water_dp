@@ -18,6 +18,24 @@ def get_frost_url():
     return settings.frost_url
 
 
+def get_entity_id_by_name(endpoint, name):
+    """Helper to find an entity ID by its name."""
+    frost_url = get_frost_url()
+    try:
+        r = requests.get(
+            f"{frost_url}/{endpoint}",
+            params={"$filter": f"name eq '{name}'", "$select": "id"},
+            timeout=5
+        )
+        if r.status_code == 200:
+            val = r.json().get("value", [])
+            if val:
+                return val[0]["@iot.id"]
+    except Exception as e:
+        logger.warning(f"Failed to lookup {endpoint} '{name}': {e}")
+    return None
+
+
 def ensure_datastream(thing_id, ds_name="Water Level"):
     """Ensure a Datastream exists for the Thing."""
     frost_url = get_frost_url()
@@ -39,9 +57,16 @@ def ensure_datastream(thing_id, ds_name="Water Level"):
         logger.error(f"Error checking datastream: {e}")
 
     # 2. Create if not exists
-    # We need Sensor and ObservedProperty (Assumed strictly existing from seeding or we create defaults)
-    # For robust simulation, we assume System Defaults (Sensor: 1, ObsProp: 1) or look them up.
-    # Let's create specific Sim Sensor/Prop if needed, but reusing ID 1 is safer for MVP.
+    # Dynamically find Sensor and ObsProp IDs
+    sensor_id = get_entity_id_by_name("Sensors", "Standard Sensor")
+    op_id = get_entity_id_by_name("ObservedProperties", "Water Level")
+
+    if not sensor_id:
+        logger.warning("Sensor 'Standard Sensor' not found. Defaulting to ID 1.")
+        sensor_id = 1
+    if not op_id:
+        logger.warning("ObservedProperty 'Water Level' not found. Defaulting to ID 1.")
+        op_id = 1
 
     payload = {
         "name": ds_name,
@@ -53,8 +78,8 @@ def ensure_datastream(thing_id, ds_name="Water Level"):
             "definition": "http://example.org",
         },
         "Thing": {"@iot.id": thing_id},
-        "Sensor": {"@iot.id": 1},  # Assuming Seeding ensured this
-        "ObservedProperty": {"@iot.id": 1},
+        "Sensor": {"@iot.id": sensor_id},
+        "ObservedProperty": {"@iot.id": op_id},
     }
 
     try:
