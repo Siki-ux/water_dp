@@ -39,13 +39,17 @@ def patch_db(cursor, db_connection):
 
         # 2. Check if the 'project' table actually exists as a BASE TABLE to be renamed
         # This prevents errors on fresh DBs where Flyway hasn't run or tables don't exist yet
-        cursor.execute("""
-            SELECT count(*) 
-            FROM information_schema.tables 
+        cursor.execute(
+            """
+            SELECT count(*)
+            FROM information_schema.tables
             WHERE table_name = 'project' AND table_type = 'BASE TABLE'
-        """)
+        """
+        )
         if cursor.fetchone()["count"] == 0:
-            logger.warning("Table 'project' not found as a base table. Skipping patching (It might be a fresh DB or handled by Flyway).")
+            logger.warning(
+                "Table 'project' not found as a base table. Skipping patching (It might be a fresh DB or handled by Flyway)."
+            )
             return
 
         logger.info("Renaming 'project' table to 'project_tbl'...")
@@ -216,22 +220,26 @@ def run_seed():
     max_retries = 20
     retry_delay = 5
     db = None
-    
+
     for attempt in range(max_retries):
         try:
             db = DBConnection()
             cursor = db.get_cursor()
-            
+
             # Check if the 'user' table exists (indicates migrations are done)
             cursor.execute("SELECT to_regclass('\"user\"')")
             if cursor.fetchone()["to_regclass"]:
                 logger.success("Database schema detected. Proceeding with seeding.")
                 break
             else:
-                logger.warning(f"Table 'user' not found yet (Attempt {attempt+1}/{max_retries}). Waiting for migrations...")
+                logger.warning(
+                    f"Table 'user' not found yet (Attempt {attempt+1}/{max_retries}). Waiting for migrations..."
+                )
         except Exception as e:
-            logger.warning(f"Database connection failed (Attempt {attempt+1}/{max_retries}): {e}")
-        
+            logger.warning(
+                f"Database connection failed (Attempt {attempt+1}/{max_retries}): {e}"
+            )
+
         if attempt < max_retries - 1:
             time.sleep(retry_delay)
         else:

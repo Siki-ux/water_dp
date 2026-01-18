@@ -50,7 +50,9 @@ class ProjectService:
             return project
 
         user_id = user.get("sub")
-        logger.info(f"Checking access for user {user_id} on project {project_id}. Owner: {project.owner_id}")
+        logger.info(
+            f"Checking access for user {user_id} on project {project_id}. Owner: {project.owner_id}"
+        )
 
         # 1. Owner Access
         if str(project.owner_id) == str(user_id):
@@ -61,9 +63,17 @@ class ProjectService:
         user_groups = user.get("groups", [])
         if not isinstance(user_groups, list):
             user_groups = [user_groups]
-        
+
         # Add entitlements and roles as fallback (matching list_projects logic)
-        user_groups.extend(user.get("eduperson_entitlement", []) if isinstance(user.get("eduperson_entitlement"), list) else [user.get("eduperson_entitlement")] if user.get("eduperson_entitlement") else [])
+        user_groups.extend(
+            user.get("eduperson_entitlement", [])
+            if isinstance(user.get("eduperson_entitlement"), list)
+            else (
+                [user.get("eduperson_entitlement")]
+                if user.get("eduperson_entitlement")
+                else []
+            )
+        )
         user_groups.extend(user.get("realm_access", {}).get("roles", []))
 
         # Sanitize
@@ -76,9 +86,14 @@ class ProjectService:
                 if g_str.startswith("/"):
                     g_str = g_str[1:]
                 sanitized_groups.append(g_str)
-        
-        if project.authorization_provider_group_id and project.authorization_provider_group_id in sanitized_groups:
-            logger.info(f"Access granted via group: {project.authorization_provider_group_id}")
+
+        if (
+            project.authorization_provider_group_id
+            and project.authorization_provider_group_id in sanitized_groups
+        ):
+            logger.info(
+                f"Access granted via group: {project.authorization_provider_group_id}"
+            )
             return project
 
         # 3. Member Access
@@ -175,7 +190,9 @@ class ProjectService:
         db: Session, user: Dict[str, Any], skip: int = 0, limit: int = 100
     ) -> List[Project]:
         is_admin = ProjectService._is_admin(user)
-        logger.info(f"Listing projects. User: {user.get('preferred_username')}, is_admin: {is_admin}")
+        logger.info(
+            f"Listing projects. User: {user.get('preferred_username')}, is_admin: {is_admin}"
+        )
 
         if is_admin:
             all_projects = db.query(Project).offset(skip).limit(limit).all()
@@ -183,19 +200,19 @@ class ProjectService:
             return all_projects
 
         user_id = str(user.get("sub"))
-        
+
         # Collect all group/role-like claims
         user_groups = user.get("groups", [])
         if not isinstance(user_groups, list):
             user_groups = [user_groups]
-            
+
         # Add entitlements (Keycloak groups often mapped here)
         entitlements = user.get("eduperson_entitlement", [])
         if isinstance(entitlements, list):
             user_groups.extend(entitlements)
         else:
             user_groups.append(entitlements)
-            
+
         # Add realm roles as fallback
         realm_roles = user.get("realm_access", {}).get("roles", [])
         user_groups.extend(realm_roles)
@@ -210,7 +227,7 @@ class ProjectService:
                 if g_str.startswith("/"):
                     g_str = g_str[1:]
                 sanitized_groups.append(g_str)
-        
+
         user_groups = list(set(sanitized_groups))
         logger.info(f"User claims for filtering: {user_groups}")
 

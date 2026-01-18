@@ -108,7 +108,9 @@ async def verify_token(token: str) -> Dict[str, Any]:
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        logger.info(f"Token verified for user: {payload.get('preferred_username', payload.get('sub'))}")
+        logger.info(
+            f"Token verified for user: {payload.get('preferred_username', payload.get('sub'))}"
+        )
         return payload
 
     except JWTError as e:
