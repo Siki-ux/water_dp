@@ -79,7 +79,7 @@ services:
     restart: unless-stopped
     environment:
       - APP_NAME=Water Data Platform
-      - DEBUG=false
+      - DEBUG=true
       - SEEDING=true
       - VERSION=1.0.0
       - API_PREFIX=/api/v1
