@@ -142,6 +142,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      api:
+        condition: service_healthy
     networks:
       - water_dp_network
 
@@ -158,6 +160,8 @@ services:
       frost:
         condition: service_started
       postgres:
+        condition: service_healthy
+      api:
         condition: service_healthy
     networks:
       - water_dp_network
