@@ -36,7 +36,11 @@ async def test_verify_token_valid(mock_jwks):
         with patch("jose.jwt.get_unverified_header", return_value={"kid": "test-kid"}):
             with patch(
                 "jose.jwt.decode",
-                return_value={"sub": "user-123", "realm_access": {"roles": ["user"]}},
+                return_value={
+                    "sub": "user-123",
+                    "realm_access": {"roles": ["user"]},
+                    "iss": "http://localhost:8081/realms/timeio",
+                },
             ):
                 payload = await verify_token("valid-token")
                 assert payload["sub"] == "user-123"
