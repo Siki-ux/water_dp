@@ -111,8 +111,15 @@ jobs:
             # Login to GHCR to pull private images
             echo ${{ secrets.GHCR_PAT }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             
-            # Reset environment (Delete volumes)
-            docker-compose -f docker-compose.prod.yml down -v
+            # Reset environment (Stop containers and remove volumes)
+            # "|| true" ensures this doesn't fail if containers are already down/missing
+            docker-compose -f docker-compose.prod.yml down -v || true
+            
+            # FREE DISK SPACE (Critical for small VMs)
+            # Remove all unused images, containers, networks
+            docker system prune -af
+            # Remove all unused volumes
+            docker volume prune -f
             
             # Pull latest images
             docker-compose -f docker-compose.prod.yml pull
