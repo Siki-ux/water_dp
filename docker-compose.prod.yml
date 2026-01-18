@@ -121,6 +121,8 @@ services:
         condition: service_healthy
       thing-management-db-migrations:
         condition: service_completed_successfully
+      frost:
+        condition: service_started
     networks:
       - water_dp_network
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000

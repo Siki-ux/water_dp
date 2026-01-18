@@ -66,4 +66,63 @@ echo "Creating new eduperson-entitlement-mapper..."
 }
 EOF
 
+
+# --------------------------------------------------------------------------------
+# Create eduperson_unique_id mapper (username)
+# --------------------------------------------------------------------------------
+echo "Configuring eduperson_unique_id mapper..."
+MAPPER_IDS=$(/opt/keycloak/bin/kcadm.sh get clients/$CLIENT_ID/protocol-mappers/models -r timeio -q name=eduperson_unique_id --fields id --format csv --noquotes)
+if [ ! -z "$MAPPER_IDS" ]; then
+    echo "Mapper(s) exist. Deleting..."
+    for id in $MAPPER_IDS; do
+        echo "Deleting mapper with ID: $id"
+        /opt/keycloak/bin/kcadm.sh delete clients/$CLIENT_ID/protocol-mappers/models/$id -r timeio
+    done
+fi
+
+/opt/keycloak/bin/kcadm.sh create clients/$CLIENT_ID/protocol-mappers/models -r timeio -f - << EOF
+{
+  "name": "eduperson_unique_id",
+  "protocol": "openid-connect",
+  "protocolMapper": "oidc-usermodel-property-mapper",
+  "consentRequired": false,
+  "config": {
+    "user.attribute": "username",
+    "id.token.claim": "true",
+    "access.token.claim": "true",
+    "claim.name": "eduperson_unique_id",
+    "userinfo.token.claim": "true"
+  }
+}
+EOF
+
+# --------------------------------------------------------------------------------
+# Create eduperson_principal_name mapper (email)
+# --------------------------------------------------------------------------------
+echo "Configuring eduperson_principal_name mapper..."
+MAPPER_IDS=$(/opt/keycloak/bin/kcadm.sh get clients/$CLIENT_ID/protocol-mappers/models -r timeio -q name=eduperson_principal_name --fields id --format csv --noquotes)
+if [ ! -z "$MAPPER_IDS" ]; then
+    echo "Mapper(s) exist. Deleting..."
+    for id in $MAPPER_IDS; do
+        echo "Deleting mapper with ID: $id"
+        /opt/keycloak/bin/kcadm.sh delete clients/$CLIENT_ID/protocol-mappers/models/$id -r timeio
+    done
+fi
+
+/opt/keycloak/bin/kcadm.sh create clients/$CLIENT_ID/protocol-mappers/models -r timeio -f - << EOF
+{
+  "name": "eduperson_principal_name",
+  "protocol": "openid-connect",
+  "protocolMapper": "oidc-usermodel-property-mapper",
+  "consentRequired": false,
+  "config": {
+    "user.attribute": "email",
+    "id.token.claim": "true",
+    "access.token.claim": "true",
+    "claim.name": "eduperson_principal_name",
+    "userinfo.token.claim": "true"
+  }
+}
+EOF
+
 echo "Keycloak configuration completed successfully."
