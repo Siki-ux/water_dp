@@ -119,6 +119,8 @@ services:
         condition: service_started
       geoserver:
         condition: service_healthy
+      thing-management-db-migrations:
+        condition: service_completed_successfully
     networks:
       - water_dp_network
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
@@ -140,6 +142,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      api:
+        condition: service_healthy
     networks:
       - water_dp_network
 
@@ -156,6 +160,8 @@ services:
       frost:
         condition: service_started
       postgres:
+        condition: service_healthy
+      api:
         condition: service_healthy
     networks:
       - water_dp_network
