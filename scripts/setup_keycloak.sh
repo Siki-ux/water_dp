@@ -29,17 +29,23 @@ echo "Found timeIO-client UUID: $CLIENT_ID"
 echo "Configuring eduperson-entitlement-mapper..."
 
 # Check if mapper exists and delete it (hyphenated name)
-MAPPER_ID=$(/opt/keycloak/bin/kcadm.sh get clients/$CLIENT_ID/protocol-mappers/models -r timeio -q name=eduperson-entitlement-mapper --fields id --format csv --noquotes)
-if [ ! -z "$MAPPER_ID" ]; then
-    echo "Mapper exists (ID: $MAPPER_ID). Deleting..."
-    /opt/keycloak/bin/kcadm.sh delete clients/$CLIENT_ID/protocol-mappers/models/$MAPPER_ID -r timeio
+MAPPER_IDS=$(/opt/keycloak/bin/kcadm.sh get clients/$CLIENT_ID/protocol-mappers/models -r timeio -q name=eduperson-entitlement-mapper --fields id --format csv --noquotes)
+if [ ! -z "$MAPPER_IDS" ]; then
+    echo "Mapper(s) exist. Deleting..."
+    for id in $MAPPER_IDS; do
+        echo "Deleting mapper with ID: $id"
+        /opt/keycloak/bin/kcadm.sh delete clients/$CLIENT_ID/protocol-mappers/models/$id -r timeio
+    done
 fi
 
 # Check for conflicting mapper (underscore name) and delete it
-CONFLICT_MAPPER_ID=$(/opt/keycloak/bin/kcadm.sh get clients/$CLIENT_ID/protocol-mappers/models -r timeio -q name=eduperson_entitlement --fields id --format csv --noquotes)
-if [ ! -z "$CONFLICT_MAPPER_ID" ]; then
-    echo "Conflicting mapper exists (ID: $CONFLICT_MAPPER_ID). Deleting..."
-    /opt/keycloak/bin/kcadm.sh delete clients/$CLIENT_ID/protocol-mappers/models/$CONFLICT_MAPPER_ID -r timeio
+CONFLICT_MAPPER_IDS=$(/opt/keycloak/bin/kcadm.sh get clients/$CLIENT_ID/protocol-mappers/models -r timeio -q name=eduperson_entitlement --fields id --format csv --noquotes)
+if [ ! -z "$CONFLICT_MAPPER_IDS" ]; then
+    echo "Conflicting mapper(s) exist. Deleting..."
+    for id in $CONFLICT_MAPPER_IDS; do
+       echo "Deleting conflicting mapper with ID: $id"
+       /opt/keycloak/bin/kcadm.sh delete clients/$CLIENT_ID/protocol-mappers/models/$id -r timeio
+    done
 fi
 
 echo "Creating new eduperson-entitlement-mapper..."
