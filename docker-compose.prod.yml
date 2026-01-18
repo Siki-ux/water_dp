@@ -305,6 +305,8 @@ services:
       - THING_MANAGEMENT_API_DSN=postgresql://${DATABASE_USER}:${DATABASE_PASSWORD}@postgres/water_data
       - THING_MANAGEMENT_MQTT_PASS=${MQTT_PASSWORD:-secure_mqtt_password}
       - OIDC_ADMIN_PASSWORD=${DATABASE_PASSWORD}
+      - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL}
+      - TIMEIO_URL=http://frost:8080/FROST-Server/v1.1
     depends_on:
       postgres:
         condition: service_healthy

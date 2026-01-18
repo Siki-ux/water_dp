@@ -308,17 +308,28 @@ def seed_data(db: Session) -> None:
             )
             FROST_URL = fallback_url
 
-        # Check if FROST is actually reachable before loop
-        try:
-            requests.get(FROST_URL, timeout=FROST_CHECK_TIMEOUT)
-        except Exception as e:
-            logger.warning(
-                f"FROST service unreachable at {FROST_URL}. Skipping TimeIO seeding: {e}"
-            )
-            return
+        # Check if FROST is actually reachable with retries
+        import time 
+        max_retries = 12
+        for attempt in range(max_retries):
+            try:
+                requests.get(FROST_URL, timeout=FROST_CHECK_TIMEOUT)
+                logger.info(f"FROST service is reachable at {FROST_URL}.")
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.info(f"FROST not ready (Attempt {attempt+1}/{max_retries}). Retrying in 5s...")
+                    time.sleep(5)
+                else:
+                    logger.warning(
+                        f"FROST service unreachable at {FROST_URL} after {max_retries} attempts. Skipping TimeIO seeding: {e}"
+                    )
+                    FROST_URL = None
 
         # Helper
         def ensure_frost_entity(endpoint, payload, force_recreate=False):
+            if not FROST_URL:
+                return None
             # (Keep existing helper logic)
             url = f"{FROST_URL}/{endpoint}"
             try:
@@ -347,29 +358,30 @@ def seed_data(db: Session) -> None:
             return None
 
         # Sensors/ObsProps
-        sensor_id = ensure_frost_entity(
-            "Sensors",
-            {
-                "name": "Standard Sensor",
-                "description": "Auto",
-                "encodingType": "application/pdf",
-                "metadata": "none",
-            },
-        )
-        op_id = ensure_frost_entity(
-            "ObservedProperties",
-            {
-                "name": "Water Level",
-                "description": "River Level",
-                "definition": "http://example.org",
-            },
-        )
-
-        # Things/Datastreams
-        if region_features:
-            logger.info(
-                f"Processing {len(region_features)} regions for TimeIO seeding..."
+        if FROST_URL:
+            sensor_id = ensure_frost_entity(
+                "Sensors",
+                {
+                    "name": "Standard Sensor",
+                    "description": "Auto",
+                    "encodingType": "application/pdf",
+                    "metadata": "none",
+                },
             )
+            op_id = ensure_frost_entity(
+                "ObservedProperties",
+                {
+                    "name": "Water Level",
+                    "description": "River Level",
+                    "definition": "http://example.org",
+                },
+            )
+
+            # Things/Datastreams
+            if region_features:
+                logger.info(
+                    f"Processing {len(region_features)} regions for TimeIO seeding..."
+                )
             for feature, poly in region_features:
                 # (Keep existing Thing/Datastream/Observation logic)
                 region_name = feature.properties.get("name") or feature.feature_id
