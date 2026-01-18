@@ -325,6 +325,8 @@ services:
     restart: "no"
     env_file:
       - timeio.env
+    healthcheck:
+      disable: true
     environment:
       - DB_URL=postgresql://postgres:${DATABASE_PASSWORD:-postgres}@postgres/water_data
       - DB_SCHEMA=public
