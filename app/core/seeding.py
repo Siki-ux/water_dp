@@ -232,62 +232,9 @@ def seed_data(db: Session) -> None:
                     logger.error(f"Failed to load CZ Rep GeoJSON: {e}")
             db.commit()
 
-        # Seed Czech Regions Praha Layer
-        if (
-            not db.query(GeoLayer)
-            .filter(GeoLayer.layer_name == "czech_regions_praha")
-            .first()
-        ):
-            logger.info("Seeding Czech Regions Praha layer...")
-            cr_praha_layer = GeoLayer(
-                layer_name="czech_regions_praha",
-                title="Czech Regions Praha",
-                description="Prague region subdivisions.",
-                store_name="water_data_store",
-                layer_type="vector",
-                geometry_type="polygon",
-                is_published="true",
-                is_public="true",
-            )
-            db.add(cr_praha_layer)
-            db.flush()
-
-            data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-            praha_path = os.path.join(data_dir, "czech_regions_praha.geojson")
-
-            if os.path.exists(praha_path):
-                try:
-                    with open(praha_path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    fs = data.get("features", [])
-                    if not fs and data.get("type") == "Feature":
-                        fs = [data]
-                    for idx, fd in enumerate(fs):
-                        props = fd.get("properties", {})
-                        # Try to find a meaningful ID, fallback to sequential
-                        fid = (
-                            props.get("id")
-                            or props.get("localId")
-                            or fd.get("id")
-                            or f"praha_{idx}"
-                        )
-                        gs = shape(fd["geometry"])
-                        wkt = from_shape(gs, srid=4326)
-                        feat = GeoFeature(
-                            layer_id="czech_regions_praha",
-                            feature_id=fid,
-                            feature_type="region",
-                            geometry=wkt,
-                            properties=props,
-                            is_active="true",
-                        )
-                        db.add(feat)
-                    logger.info("Successfully loaded Czech Regions Praha data.")
-                except Exception as e:
-                    logger.error(f"Failed to load Czech Regions Praha GeoJSON: {e}")
-            else:
-                logger.warning(f"File not found: {praha_path}")
-            db.commit()
+        # Seed Czech Regions Praha Layer: SKIP (Managed by GeoServer Stack)
+        # We rely on GeoServer WFS for this layer now.
+        pass
 
         # -------------------------------------------------------------------------
         # PART 2: Seed TimeIO (FROST) - CHECK ONLY (Consumer Mode)
@@ -450,84 +397,11 @@ def seed_data(db: Session) -> None:
 
             db.commit()
 
-        # 5. Publish to GeoServer
-        try:
-            logger.info("Publishing to GeoServer...")
-            from app.services.geoserver_service import GeoServerService
-
-            gs_service = GeoServerService()
-            if gs_service.test_connection():
-                workspace_name = "water_data"
-                store_name = "water_data_store"
-
-                # Ensure workspace exists
-                gs_service.create_workspace(workspace_name)
-
-                # Ensure DataStore exists
-                connection_params = {
-                    "host": "water-dp-postgres",
-                    "port": "5432",
-                    "database": "water_app",
-                    "user": "postgres",
-                    "passwd": "postgres",
-                    "dbtype": "postgis",
-                    "schema": "public",
-                }
-                gs_service.create_datastore(
-                    store_name, connection_params=connection_params
-                )
-
-                # Publish SQL View for Czech Regions
-                layer_name = "czech_regions"
-                sql = f"SELECT * FROM geo_features WHERE layer_id = '{layer_name}'"
-
-                gs_service.publish_sql_view(
-                    layer_name=layer_name,
-                    store_name=store_name,
-                    sql=sql,
-                    title="Czech Republic Regions",
-                    workspace=workspace_name,
-                )
-                logger.info(f"Successfully published layer {layer_name} to GeoServer")
-
-                # Publish SQL View for Czech Republic
-                layer_name_cz = "czech_republic"
-                sql_cz = (
-                    f"SELECT * FROM geo_features WHERE layer_id = '{layer_name_cz}'"
-                )
-
-                gs_service.publish_sql_view(
-                    layer_name=layer_name_cz,
-                    store_name=store_name,
-                    sql=sql_cz,
-                    title="Czech Republic",
-                    workspace=workspace_name,
-                )
-                logger.info(
-                    f"Successfully published layer {layer_name_cz} to GeoServer"
-                )
-
-                # Publish SQL View for Czech Regions Praha
-                layer_name_praha = "czech_regions_praha"
-                sql_praha = (
-                    f"SELECT * FROM geo_features WHERE layer_id = '{layer_name_praha}'"
-                )
-
-                gs_service.publish_sql_view(
-                    layer_name=layer_name_praha,
-                    store_name=store_name,
-                    sql=sql_praha,
-                    title="Czech Regions Praha",
-                    workspace=workspace_name,
-                )
-                logger.info(
-                    f"Successfully published layer {layer_name_praha} to GeoServer"
-                )
-            else:
-                logger.warning("Could not connect to GeoServer. Skipping publication.")
-
-        except Exception as e:
-            logger.error(f"GeoServer publication failed: {e}")
+        # 5. Publish to GeoServer - SKIPPED
+        # [MODIFIED] We no longer publish layers from water_dp seeding.
+        # GeoServer is now independent and seeded via geoserver_stack/scripts/seed_geoserver.py.
+        # This prevents overwriting the DataStore configuration.
+        logger.info("Skipping GeoServer publication (managed by geoserver_stack).")
 
         # -------------------------------------------------------------------------
         # PART 3: Seed User Context (Projects, Dashboards)

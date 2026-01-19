@@ -226,8 +226,8 @@ class TimeSeriesService:
             resp = requests.get(url_id, timeout=self._get_timeout())
             if resp.status_code == 200:
                 iot_id = station_id
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Direct ID lookup for station update failed: {e}")
 
         # 2. If not found, try filter by station_id property
         if not iot_id:
@@ -303,9 +303,9 @@ class TimeSeriesService:
             if resp.status_code == 200:
                 # Found by ID
                 iot_id = station_id  # It is the ID
-        except Exception:
+        except Exception as e:
             # Fallback
-            pass
+            logger.debug(f"Direct ID lookup for station deletion failed: {e}")
 
         # 2. If not found, try filter by station_id property
         if not iot_id:
@@ -443,8 +443,11 @@ class TimeSeriesService:
             escaped_param = self._escape_odata_string(parameter)
             filter_list.append(f"ObservedProperty/name eq '{escaped_param}'")
         if station_id:
-            # Try matching Thing name or properties/station_id
-            pass
+            # Match Thing name or properties/station_id
+            escaped_sid = self._escape_odata_string(station_id)
+            filter_list.append(
+                f"(Thing/name eq '{escaped_sid}' or Thing/properties/station_id eq '{escaped_sid}')"
+            )
 
         if filter_list:
             params["$filter"] = " and ".join(filter_list)
@@ -1435,6 +1438,7 @@ class TimeSeriesService:
             if self.get_time_series_metadata_by_id(series_id):
                 return series_id
         except (ResourceNotFoundException, TimeSeriesException):
+            # Not found, proceed to create
             pass
 
         # Need Thing ID

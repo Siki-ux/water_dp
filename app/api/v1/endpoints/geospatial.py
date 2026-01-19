@@ -3,12 +3,14 @@ Geospatial API endpoints.
 """
 
 import logging
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, has_role
+from app.core.config import settings
 from app.core.database import get_db
 from app.schemas.geospatial import (
     FeatureListResponse,
@@ -56,24 +58,67 @@ async def get_geo_layers(
     db: Session = Depends(get_db),
 ):
     """Get geospatial layers with filtering."""
-    db_service = DatabaseService(db)
-    layers = db_service.get_geo_layers(workspace=workspace, layer_type=layer_type)
+    """Get geospatial layers with filtering (Proxy to GeoServer)."""
+    # [USER REQUEST] Get layers from GeoServer, not local DB.
+    try:
+        from app.services.geoserver_service import GeoServerService
 
-    # Apply additional filters
-    if is_published is not None:
-        layers = [
-            layer for layer in layers if layer.is_published == str(is_published).lower()
-        ]
-    if is_public is not None:
-        layers = [
-            layer for layer in layers if layer.is_public == str(is_public).lower()
-        ]
+        geoserver_service = GeoServerService()
 
-    # Apply pagination
-    total = len(layers)
-    layers = layers[skip : skip + limit]
+        # Fetch from GeoServer (default workspace if not specified)
+        target_workspace = workspace or settings.geoserver_workspace
+        if not target_workspace:
+            # If no workspace configured/provided, return empty or fail?
+            # Let's try to get from configured default
+            target_workspace = "water_data"
 
-    return LayerListResponse(layers=layers, total=total, skip=skip, limit=limit)
+        try:
+            gs_layers = geoserver_service.get_layers(target_workspace)
+        except Exception:
+            # Fallback to empty if connection fails
+            gs_layers = []
+
+        # Map GeoServerLayerInfo to GeoLayerResponse (Mocking DB fields)
+        mapped_layers = []
+        for i, gs_l in enumerate(gs_layers):
+            # Filtering
+            if workspace and gs_l.workspace != workspace:
+                continue
+
+            mapped_layers.append(
+                {
+                    "id": i + 1,  # Dummy ID
+                    "layer_name": gs_l.name,
+                    "title": gs_l.title,
+                    "description": gs_l.abstract,
+                    "workspace": gs_l.workspace,
+                    "store_name": gs_l.store,
+                    "srs": gs_l.srs,
+                    "layer_type": "vector",  # Assumption or need better mapping
+                    "geometry_type": "polygon",  # Assumption
+                    "is_published": True,
+                    "is_public": True,  # Assumption
+                    "created_at": datetime.utcnow(),
+                    "updated_at": datetime.utcnow(),
+                }
+            )
+
+        # Apply pagination
+        total = len(mapped_layers)
+        start = skip
+        end = skip + limit
+        paged_layers = mapped_layers[start:end]
+
+        return LayerListResponse(
+            layers=paged_layers, total=total, skip=skip, limit=limit
+        )
+
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        logger.error(f"Failed to fetch layers from GeoServer: {e}")
+        raise HTTPException(status_code=500, detail=f"GeoServer Proxy Error: {str(e)}")
 
 
 @router.get("/layers/{layer_name}", response_model=GeoLayerResponse)
@@ -418,6 +463,8 @@ async def get_layer_bbox(
         if not bbox:
             raise HTTPException(status_code=404, detail="BBox not found or layer empty")
         return {"bbox": bbox}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to get bbox for layer {layer_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

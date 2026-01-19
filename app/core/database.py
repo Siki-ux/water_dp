@@ -54,37 +54,55 @@ def init_db() -> None:
     Creates tables and indexes if they don't exist.
     Handles existing objects gracefully.
     """
-    try:
-        # Import all models explicitly to ensure they are registered with Base.metadata
-        # This is required for SQLAlchemy's declarative base to discover and create tables
-        from sqlalchemy import text
+    import time
 
-        from app.models import GeoFeature, GeoLayer  # noqa: F401
+    max_retries = 30
+    retry_interval = 2
 
-        # Use checkfirst=True to avoid errors if tables already exist
-        logger.info(
-            f"Targeting tables for creation: {list(Base.metadata.tables.keys())}"
-        )
+    for attempt in range(max_retries):
+        try:
+            # Import all models explicitly to ensure they are registered with Base.metadata
+            # This is required for SQLAlchemy's declarative base to discover and create tables
+            from sqlalchemy import text
 
-        # Ensure PostGIS extension exists
-        with engine.connect() as connection:
-            connection.execute(text("CREATE EXTENSION IF NOT EXISTS postgis CASCADE;"))
-            connection.commit()
+            from app.models import GeoFeature, GeoLayer  # noqa: F401
 
-        Base.metadata.create_all(bind=engine, checkfirst=True)
-        logger.info("Database tables initialized successfully")
-    except (ProgrammingError, OperationalError) as e:
-        # Handle cases where indexes or constraints already exist
-        error_str = str(e).lower()
-        logger.error(
-            f"Database initialization exception details: {e}"
-        )  # Force log the error
-        if "already exists" in error_str or "duplicate" in error_str:
-            logger.warning(f"Some database objects already exist (this is normal): {e}")
-            logger.info("Database schema is up to date")
-        else:
-            logger.error(f"Database initialization error: {e}")
+            # Use checkfirst=True to avoid errors if tables already exist
+            logger.info(
+                f"Targeting tables for creation: {list(Base.metadata.tables.keys())}"
+            )
+
+            # Ensure PostGIS extension exists
+            with engine.connect() as connection:
+                connection.execute(
+                    text("CREATE EXTENSION IF NOT EXISTS postgis CASCADE;")
+                )
+                connection.commit()
+
+            Base.metadata.create_all(bind=engine, checkfirst=True)
+            logger.info("Database tables initialized successfully")
+            return  # Success
+        except (ProgrammingError, OperationalError) as e:
+            error_str = str(e).lower()
+            if "already exists" in error_str or "duplicate" in error_str:
+                logger.warning(
+                    f"Some database objects already exist (this is normal): {e}"
+                )
+                logger.info("Database schema is up to date")
+                return  # Success
+            elif isinstance(e, OperationalError) and "connection refused" in error_str:
+                logger.warning(
+                    f"Database connection refused (Attempt {attempt + 1}/{max_retries}). Retrying in {retry_interval}s..."
+                )
+                time.sleep(retry_interval)
+            else:
+                logger.error(
+                    f"Database initialization exception details: {e}"
+                )  # Force log the error
+                raise
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {e}")
             raise
-    except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
-        raise
+
+    logger.error("Max retries exceeded. Could not connect to database.")
+    raise Exception("Max retries exceeded. Could not connect to database.")

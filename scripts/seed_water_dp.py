@@ -37,13 +37,13 @@ def wait_for_services():
                 logger.info("FROST is Up.")
                 return
         except Exception:
-            pass
+            logger.debug("FROST not ready yet, retrying...")
         time.sleep(2)
     logger.warning("FROST unreachable. Seeding might be partial.")
 
     # Core logic: wait for services and then run seeding from app.core.seeding
     # TimeIO parts are handled gracefully inside seed_data if configured correctly.
-    pass
+    logger.info("Service seeding initialization...")
 
 
 def main():

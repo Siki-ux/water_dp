@@ -46,8 +46,8 @@ def test_create_geo_layer(client):
 
 
 def test_get_geo_layers(client):
-    with patch("app.api.v1.endpoints.geospatial.DatabaseService") as MockService:
-        MockService.return_value.get_geo_layers.return_value = []
+    with patch("app.services.geoserver_service.GeoServerService") as MockService:
+        MockService.return_value.get_layers.return_value = []
 
         response = client.get("/api/v1/geospatial/layers")
         assert response.status_code == 200

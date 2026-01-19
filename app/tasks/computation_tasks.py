@@ -1,7 +1,10 @@
 import importlib.util
+import logging
 import os
 
 from app.core.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
 
 
 @celery_app.task(bind=True)
@@ -42,7 +45,9 @@ def run_computation_task(
                 resolved_script_id = uuid.UUID(str(script_id))
             except ValueError:
                 # script_id is not a valid UUID, fallback to DB lookup
-                pass
+                logger.debug(
+                    f"Provided script_id '{script_id}' is not a valid UUID, falling back to database lookup."
+                )
 
         if not resolved_script_id:
             # Fallback to DB lookup

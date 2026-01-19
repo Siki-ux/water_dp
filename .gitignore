@@ -39,3 +39,6 @@ Thumbs.db
 
 # Seeded Computation Scripts
 app/computations/*_flood_prediction.py
+
+# Ruff cache
+.ruff_cache/

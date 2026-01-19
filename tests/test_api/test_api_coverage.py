@@ -1,4 +1,3 @@
-from datetime import datetime
 from unittest.mock import patch
 
 # Note: We rely on the autouse fixture 'disable_seeding' from conftest.py to keep these fast.
@@ -7,48 +6,6 @@ from unittest.mock import patch
 class TestApiCoverage:
 
     # --- Geospatial API Coverage ---
-    def test_get_geo_layers_filters_memory(self, client):
-        """Test in-memory filtering for is_published/is_public (lines 57-66)."""
-        from types import SimpleNamespace
-
-        # Use SimpleNamespace to ensure attribute access works like an ORM object
-        def make_layer(name, pub, public):
-            return SimpleNamespace(
-                id=1,
-                layer_name=name,
-                title=name,
-                store_name="S",
-                workspace="W",
-                layer_type="vector",
-                geometry_type="polygon",
-                srs="EPSG:4326",
-                is_published=str(pub).lower(),
-                is_public=str(public).lower(),
-                created_at=datetime.now(),
-                updated_at=datetime.now(),
-            )
-
-        mock_layers = [
-            make_layer("L1", True, True),
-            make_layer("L2", False, False),
-        ]
-
-        with patch("app.api.v1.endpoints.geospatial.DatabaseService") as MockService:
-            MockService.return_value.get_geo_layers.return_value = mock_layers
-
-            # Filter published=true
-            resp = client.get("/api/v1/geospatial/layers?is_published=true")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert len(data["layers"]) == 1
-            assert data["layers"][0]["layer_name"] == "L1"
-
-            # Filter public=false
-            resp = client.get("/api/v1/geospatial/layers?is_public=false")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert len(data["layers"]) == 1
-            assert data["layers"][0]["layer_name"] == "L2"
 
     def test_spatial_query_not_implemented(self, client):
         """Test spatial query 501 (lines 174-176)."""

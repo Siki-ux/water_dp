@@ -6,7 +6,7 @@ import logging
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
@@ -55,8 +55,6 @@ async def lifespan(app: FastAPI):
 
     logger.info("Shutting down Water Data Platform API...")
 
-
-# ...
 
 app = FastAPI(
     title=settings.app_name,
@@ -115,8 +113,10 @@ async def health_check(response: Response):
 
     Returns:
     - **200 OK**: Service is healthy and fully seeded.
+    - **503 Service Unavailable**: Service is still initializing.
     """
     if not getattr(app.state, "startup_complete", False):
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return {
             "status": "initializing",
             "message": "Seeding data in progress...",

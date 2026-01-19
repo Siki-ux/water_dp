@@ -6,7 +6,6 @@ import logging
 from typing import Any, Dict, List, Optional
 
 import requests
-from geoalchemy2.shape import to_shape
 from shapely.geometry import shape
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -218,59 +217,76 @@ class DatabaseService:
     def get_sensors_in_layer(self, layer_name: str) -> List[Dict[str, Any]]:
         """
         Get all sensors (Things) that are spatially within the geometry of a layer's features.
-        Assumes FROST schema Tables (THINGS, LOCATIONS) are present.
+        Fetches layer geometry from GeoServer (WFS) and uses FROST OGC Spatial Filters.
         """
+        from app.services.geoserver_service import GeoServerService
 
-        # 1. Check if layer exists
-        self.get_geo_layer(layer_name)
-
-        # 2. Fetch all features for this layer
-        features = self.get_geo_features(layer_name, limit=10000)
+        # 1. Fetch features from GeoServer WFS
+        try:
+            gs_service = GeoServerService()
+            geojson_data = gs_service.get_wfs_features(layer_name)
+            features = geojson_data.get("features", [])
+        except Exception as e:
+            logger.error(f"Failed to fetch layer {layer_name} from GeoServer: {e}")
+            return []
 
         if not features:
+            logger.warning(f"No features found in layer {layer_name} from GeoServer.")
             return []
 
         try:
-            # 3. Build a combined geometry or PreparedGeometry for fast checking
-            # Using simple iteration for now, optimal for moderate complexity
-
-            # Convert all features to shapely shapes
+            # 2. Build geometries from GeoJSON
             polygons = []
             for f in features:
                 try:
-                    s = to_shape(f.geometry)
-                    polygons.append(s)
-                except Exception:
-                    pass
+                    geom = f.get("geometry")
+                    if geom:
+                        s = shape(geom)
+                        polygons.append(s)
+                except Exception as ex:
+                    fid = f.get("id", "unknown")
+                    logger.warning(f"Skipping invalid geometry in feature {fid}: {ex}")
 
             if not polygons:
                 return []
 
-            # Create a MultiPolygon or just a list to check against
-            # Checking against ANY polygon
-            # For efficiency, we could union them, but that's expensive for complex grids.
-            # Let's fetch Things from FROST and simple check.
+            # 3. Calculate BBOX for FROST Optimization
+            # Union all polygons to get the total bounds
+            from shapely.ops import unary_union
 
-            # 4. Fetch Things with Locations from FROST URL
+            combined = unary_union(polygons)
+            minx, miny, maxx, maxy = combined.bounds
+
+            # 4. Fetch Things from FROST using Spatial Filter (BBOX)
             frost_url = settings.frost_url
             if not frost_url:
                 logger.warning("FROST_URL not set, cannot retrieve sensors.")
                 return []
 
-            # Use BBox of the layer to filter FROST query if possible?
-            # For now, fetch all Things (assuming < 10000 or using pages)
-            # Expand Locations to get geometry
+            next_link = f"{frost_url}/Things?$expand=Locations"
+
+            # Construct WKT Polygon for BBOX
+            wkt_polygon = f"POLYGON(({minx} {miny}, {maxx} {miny}, {maxx} {maxy}, {minx} {maxy}, {minx} {miny}))"
+
+            # Append filter to FROST request
+            filter_param = (
+                f"st_intersects(Locations/location, geography'{wkt_polygon}')"
+            )
+            next_link += f"&$filter={filter_param}"
+
+            logger.debug(
+                f"Using spatial optimization for layer {layer_name}. WKT: {wkt_polygon}"
+            )
 
             sensors = []
-            next_link = f"{frost_url}/Things?$expand=Locations"
 
             # Safety limit for pages
             page_count = 0
-            max_pages = 20
+            max_pages = 50
 
             while next_link and page_count < max_pages:
                 try:
-                    resp = requests.get(next_link, timeout=10)
+                    resp = requests.get(next_link, timeout=20)
                     if resp.status_code != 200:
                         logger.error(f"FROST Error: {resp.status_code} {resp.text}")
                         break
@@ -297,8 +313,7 @@ class DatabaseService:
                             # Shapely shape from dict
                             thing_point = shape(loc_geo)
 
-                            # Check intersection with ANY layer polygon
-                            # (Optimize: prep geometry if single, or just loop)
+                            # Check intersection with ANY layer polygon (Precise check)
                             match = False
                             for poly in polygons:
                                 if poly.intersects(thing_point):
@@ -333,38 +348,40 @@ class DatabaseService:
 
     def get_layer_bbox(self, layer_name: str) -> Optional[List[float]]:
         """
-        Get the bounding box of a layer.
-        Returns [min_lon, min_lat, max_lon, max_lat].
+        Get the bounding box of a layer from GeoServer WFS data.
+        Returns: [minx, miny, maxx, maxy] or None
         """
-        from sqlalchemy import text
+        from app.services.geoserver_service import GeoServerService
 
         try:
-            # Check layer exists
-            self.get_geo_layer(layer_name)
+            gs_service = GeoServerService()
+            geojson_data = gs_service.get_wfs_features(layer_name)
+            features = geojson_data.get("features", [])
 
-            # Query for cleaner output using ST_XMin, ST_YMin, etc.
-            query = text(
-                """
-                SELECT
-                    ST_XMin(ST_Extent(geometry)),
-                    ST_YMin(ST_Extent(geometry)),
-                    ST_XMax(ST_Extent(geometry)),
-                    ST_YMax(ST_Extent(geometry))
-                FROM geo_features
-                WHERE layer_id = :layer_name
-            """
-            )
-            result = self.db.execute(query, {"layer_name": layer_name}).fetchone()
+            if not features:
+                return None
 
-            if result and all(x is not None for x in result):
-                return [
-                    float(result[0]),
-                    float(result[1]),
-                    float(result[2]),
-                    float(result[3]),
-                ]
-            return None
+            polygons = []
+            for f in features:
+                geom = f.get("geometry")
+                if geom:
+                    try:
+                        s = shape(geom)
+                        polygons.append(s)
+                    except Exception as ex:
+                        fid = f.get("id", "unknown")
+                        logger.warning(
+                            f"Skipping invalid geometry for bbox calc in feature {fid}: {ex}"
+                        )
+
+            if not polygons:
+                return None
+
+            from shapely.ops import unary_union
+
+            combined = unary_union(polygons)
+            return list(combined.bounds)
 
         except Exception as e:
-            logger.error(f"Failed to get bbox for layer {layer_name}: {e}")
-            raise DatabaseException(f"Failed to get layer bbox: {e}")
+            logger.error(f"Failed to calculate bbox for {layer_name} from WFS: {e}")
+            return None

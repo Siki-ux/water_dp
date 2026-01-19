@@ -25,6 +25,7 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = Field(alias="DATABASE_URL")
+    postgres_db: Optional[str] = Field(default=None, alias="POSTGRES_DB")
     database_pool_size: int = Field(default=10, alias="DATABASE_POOL_SIZE")
     database_max_overflow: int = Field(default=20, alias="DATABASE_MAX_OVERFLOW")
 
@@ -32,9 +33,11 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="redis://localhost:6379", alias="REDIS_URL")
 
     # GeoServer
-    geoserver_url: str = Field(alias="GEOSERVER_URL")
-    geoserver_username: str = Field(alias="GEOSERVER_USERNAME")
-    geoserver_password: str = Field(alias="GEOSERVER_PASSWORD")
+    geoserver_url: str = Field(
+        default="http://localhost:8080/geoserver", alias="GEOSERVER_URL"
+    )
+    geoserver_username: str = Field(default="admin", alias="GEOSERVER_USERNAME")
+    geoserver_password: str = Field(default="geoserver", alias="GEOSERVER_PASSWORD")
     geoserver_workspace: str = Field(default="water_data", alias="GEOSERVER_WORKSPACE")
     geoserver_timeout: int = Field(default=30, alias="GEOSERVER_TIMEOUT")
 
@@ -99,6 +102,20 @@ class Settings(BaseSettings):
                 # Fallback to comma split if json parse fails
                 pass
         return [origin.strip() for origin in self.cors_origins.split(",")]
+
+    @property
+    def postgres_db_name(self) -> str:
+        """Extract database name from DATABASE_URL."""
+        from sqlalchemy.engine.url import make_url
+
+        try:
+            return make_url(self.database_url).database
+        except Exception:
+            # Fallback for simple string parsing if sqlalchemy fails or url is invalid
+            if "/" in self.database_url:
+                with_params = self.database_url.split("/")[-1]
+                return with_params.split("?")[0]
+            return "water_app"
 
 
 # Global settings instance
