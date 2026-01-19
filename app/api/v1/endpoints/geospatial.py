@@ -368,6 +368,29 @@ async def get_wfs_url(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/geoserver/layers/{layer_name}/geojson")
+async def get_layer_geojson(
+    layer_name: str,
+    workspace: Optional[str] = Query(None, description="Workspace name"),
+):
+    """Get layer features as GeoJSON directly from GeoServer."""
+    try:
+        geoserver_service = GeoServerService()
+
+        if not geoserver_service.test_connection():
+            raise HTTPException(status_code=503, detail="Cannot connect to GeoServer")
+
+        features = geoserver_service.get_wfs_features(
+            layer_name=layer_name, workspace=workspace
+        )
+        return features
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get layer GeoJSON: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/layers/{layer_name}/sensors")
 async def get_sensors_in_layer(
     layer_name: str,

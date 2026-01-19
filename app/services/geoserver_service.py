@@ -109,7 +109,24 @@ class GeoServerService:
                 check_status=False,
             )
             if resp.status_code == 200:
-                logger.info(f"Data store {store_name} already exists")
+                logger.info(
+                    f"Data store {store_name} already exists. Updating configuration..."
+                )
+                # Update existing store
+                store_data = {
+                    "dataStore": {
+                        "name": store_name,
+                        "type": store_type,
+                        "enabled": True,
+                        "connectionParameters": connection_params or {},
+                    }
+                }
+                self._make_request(
+                    "PUT",
+                    f"/workspaces/{self.workspace}/datastores/{store_name}.json",
+                    json=store_data,
+                )
+                logger.info(f"Updated data store: {store_name}")
                 return True
             elif resp.status_code == 404:
                 # Store doesn't exist, create it
@@ -193,11 +210,8 @@ class GeoServerService:
                 f"/workspaces/{workspace}/layers/{layer_name}.json",
                 check_status=False,
             )
-            if resp.status_code == 200:
-                logger.info(f"Layer {layer_name} already exists. Skipping.")
-                return True
-            elif resp.status_code != 404:
-                resp.raise_for_status()
+
+            exists = resp.status_code == 200
 
             feature_type_config = {
                 "featureType": {
@@ -227,16 +241,25 @@ class GeoServerService:
                 }
             }
 
-            logger.info(f"Publishing SQL View layer: {layer_name}")
+            logger.info(f"Publishing/Updating SQL View layer: {layer_name}")
 
-            # Create the feature type
-            self._make_request(
-                "POST",
-                f"/workspaces/{workspace}/datastores/{store_name}/featuretypes.json",
-                json=feature_type_config,
-            )
+            if exists:
+                # Update existing layer
+                self._make_request(
+                    "PUT",
+                    f"/workspaces/{workspace}/datastores/{store_name}/featuretypes/{layer_name}.json",
+                    json=feature_type_config,
+                )
+                logger.info(f"Successfully updated SQL View layer: {layer_name}")
+            else:
+                # Create the feature type
+                self._make_request(
+                    "POST",
+                    f"/workspaces/{workspace}/datastores/{store_name}/featuretypes.json",
+                    json=feature_type_config,
+                )
+                logger.info(f"Successfully published SQL View layer: {layer_name}")
 
-            logger.info(f"Successfully published SQL View layer: {layer_name}")
             return True
 
         except Exception as e:
@@ -453,45 +476,32 @@ class GeoServerService:
         param_string = "&".join([f"{k}={v}" for k, v in params.items()])
         return f"{self.wfs_url}?{param_string}"
 
-    def sync_layer_with_database(
+    def get_wfs_features(
         self,
         layer_name: str,
-        table_name: str,
-        geometry_column: str = "geometry",
         workspace: str = None,
-    ) -> bool:
-        """
-        Sync GeoServer layer with database table.
-        DEPRECATED: Use direct datastore creation and publish_layer or publish_sql_view instead.
-        """
+        output_format: str = "application/json",
+    ) -> Dict[str, Any]:
+        """Fetch WFS features directly from GeoServer."""
         workspace = workspace or self.workspace
 
+        params = {
+            "service": "WFS",
+            "version": "2.0.0",
+            "request": "GetFeature",
+            "typeNames": f"{workspace}:{layer_name}",
+            "outputFormat": output_format,
+        }
+
         try:
-            # Create or update data store connection
-            store_name = f"{table_name}_store"
-            # Hardcoded for now as it was in original
-            connection_params = {
-                "host": "localhost",
-                "port": "5432",
-                "database": "water_data",
-                "user": "postgres",
-                "passwd": "password",
-                "dbtype": "postgis",
-                "schema": "public",
-            }
-
-            self.create_datastore(store_name, "postgis", connection_params)
-
-            # Publish layer
-            layer_request = LayerPublishRequest(
-                layer_name=layer_name,
-                workspace=workspace,
-                store_name=store_name,
-                is_public=True,
+            response = requests.get(
+                self.wfs_url,
+                params=params,
+                auth=self.auth,
+                timeout=settings.geoserver_timeout,
             )
-
-            return self.publish_layer(layer_request)
-
+            response.raise_for_status()
+            return response.json()
         except Exception as e:
-            logger.error(f"Failed to sync layer {layer_name} with database: {e}")
-            raise
+            logger.error(f"Failed to fetch WFS features for {layer_name}: {e}")
+            raise GeoServerException(f"Failed to fetch features: {e}")

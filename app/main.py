@@ -3,11 +3,10 @@ Main FastAPI application.
 """
 
 import logging
-import asyncio
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response, status
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
@@ -22,32 +21,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
     logger.info("Starting Water Data Platform API...")
-    
+
     # Initialize startup state
     app.state.startup_complete = False
-
-    def run_seeding_sync():
-        """Run seeding logic synchronously."""
-        try:
-            if settings.seeding:
-                from app.core.database import SessionLocal
-                from app.core.seeding import seed_data
-                
-                logger.info("Starting background seeding...")
-                db = SessionLocal()
-                try:
-                    seed_data(db)
-                    logger.info("Background seeding completed successfully.")
-                except Exception as e:
-                    logger.error(f"Seeding failed: {e}")
-                finally:
-                    db.close()
-        except Exception as e:
-            logger.error(f"Error in seeding task: {e}")
 
     try:
         init_db()
@@ -62,14 +43,9 @@ async def lifespan(app: FastAPI):
             register_system_datasources(db_sys)
         finally:
             db_sys.close()
-            
-        # Launch seeding in background
-        async def background_task():
-            await asyncio.to_thread(run_seeding_sync)
-            app.state.startup_complete = True
-            logger.info("Application is now fully healthy and ready.")
 
-        asyncio.create_task(background_task())
+        app.state.startup_complete = True
+        logger.info("Application is now fully healthy and ready.")
 
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
@@ -78,6 +54,7 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("Shutting down Water Data Platform API...")
+
 
 # ...
 
@@ -138,10 +115,8 @@ async def health_check(response: Response):
 
     Returns:
     - **200 OK**: Service is healthy and fully seeded.
-    - **503 Service Unavailable**: Service is starting up (seeding in progress).
     """
     if not getattr(app.state, "startup_complete", False):
-        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return {
             "status": "initializing",
             "message": "Seeding data in progress...",
@@ -192,34 +167,6 @@ async def log_requests(request: Request, call_next):
         logger.info(f"Response: {response.status_code} - {process_time:.3f}s")
 
     return response
-
-
-@app.get("/health", tags=["General"])
-async def health_check(response: Response):
-    """
-    ## Health Check
-
-    Check the health status of the Water Data Platform API.
-
-    Returns:
-    - **200 OK**: Service is healthy and fully seeded.
-    - **503 Service Unavailable**: Service is starting up (seeding in progress).
-    """
-    if not getattr(app.state, "startup_complete", False):
-        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {
-            "status": "initializing",
-            "message": "Seeding data in progress...",
-            "app_name": settings.app_name,
-            "timestamp": time.time(),
-        }
-
-    return {
-        "status": "healthy",
-        "app_name": settings.app_name,
-        "version": settings.version,
-        "timestamp": time.time(),
-    }
 
 
 @app.get("/docs", tags=["General"])

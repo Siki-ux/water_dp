@@ -22,10 +22,10 @@ except ImportError as e:
 configure_logger()
 
 # Configuration
-FROST_URL = os.getenv("FROST_URL", "http://frost:8080/FROST-Server/v1.1")
+FROST_URL = os.getenv("FROST_URL", "http://timeio-frost:8080/FROST-Server/v1.1")
 # Try internal service query if env not set correctly for container-to-container
 if "localhost" in FROST_URL:
-    FROST_URL = "http://frost:8080/FROST-Server/v1.1"
+    FROST_URL = "http://timeio-frost:8080/FROST-Server/v1.1"
 
 
 def patch_db(cursor, db_connection):

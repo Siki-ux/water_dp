@@ -25,7 +25,7 @@ def get_entity_id_by_name(endpoint, name):
         r = requests.get(
             f"{frost_url}/{endpoint}",
             params={"$filter": f"name eq '{name}'", "$select": "id"},
-            timeout=5
+            timeout=5,
         )
         if r.status_code == 200:
             val = r.json().get("value", [])

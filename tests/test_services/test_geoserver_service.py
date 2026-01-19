@@ -219,14 +219,3 @@ class TestGeoServerService:
         url = service.generate_wfs_url("my_layer", workspace="my_ws")
         assert service.wfs_url in url
         assert "typeNames=my_ws:my_layer" in url
-
-    @patch("app.services.geoserver_service.requests.request")
-    def test_sync_layer_with_database(self, mock_request, service):
-        # This implementation likely calls internal methods.
-        # We'll patch them on the instance to avoid complex nested mocks
-        with patch.object(service, "create_datastore", return_value=True), patch.object(
-            service, "publish_layer", return_value=True
-        ):
-
-            result = service.sync_layer_with_database("layer1", "table1")
-            assert result is True

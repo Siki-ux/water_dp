@@ -6,8 +6,6 @@ Populates the database with initial data including Czech Republic regions and ti
 import json
 import logging
 import os
-import random
-from datetime import datetime, timedelta, timezone
 from typing import List, Tuple
 
 import requests  # Added for TimeIO seeding
@@ -292,24 +290,17 @@ def seed_data(db: Session) -> None:
             db.commit()
 
         # -------------------------------------------------------------------------
-        # PART 2: Seed TimeIO (FROST) - Always Run Check
+        # PART 2: Seed TimeIO (FROST) - CHECK ONLY (Consumer Mode)
         # -------------------------------------------------------------------------
-        logger.info("Checking/Seeding TimeIO data...")
+        # Updated Logic: We assume TimeIO Stack is the Producer.
+        # We only check if FROST is up. We do NOT create standard sensors/obs props.
+        logger.info("Checking TimeIO data (Consumer Mode)...")
 
-        # Frost URL setup
         FROST_URL = settings.frost_url
-        fallback_url = "http://localhost:8083/FROST-Server/v1.1"
-
-        try:
-            requests.get(FROST_URL, timeout=FROST_CHECK_TIMEOUT)
-        except Exception:
-            logger.warning(
-                f"FROST check failed for {FROST_URL}. Trying fallback {fallback_url}"
-            )
-            FROST_URL = fallback_url
 
         # Check if FROST is actually reachable with retries
-        import time 
+        import time
+
         max_retries = 12
         for attempt in range(max_retries):
             try:
@@ -318,7 +309,9 @@ def seed_data(db: Session) -> None:
                 break
             except Exception as e:
                 if attempt < max_retries - 1:
-                    logger.info(f"FROST not ready (Attempt {attempt+1}/{max_retries}). Retrying in 5s...")
+                    logger.info(
+                        f"FROST not ready (Attempt {attempt+1}/{max_retries}). Retrying in 5s..."
+                    )
                     time.sleep(5)
                 else:
                     logger.warning(
@@ -368,7 +361,7 @@ def seed_data(db: Session) -> None:
                     "metadata": "none",
                 },
             )
-            op_id = ensure_frost_entity(
+            _ = ensure_frost_entity(
                 "ObservedProperties",
                 {
                     "name": "Water Level",
@@ -378,137 +371,81 @@ def seed_data(db: Session) -> None:
             )
 
             # Things/Datastreams
+            # [CONSUMER CHANGE] TimeIO Stack owns Thing Creation.
+            # We skip creating "Station X" things here.
+            # However, we still iterate regions to Update Local GeoFeature Props with IDs if found.
+
             if region_features:
                 logger.info(
-                    f"Processing {len(region_features)} regions for TimeIO seeding..."
+                    f"Linking {len(region_features)} regions to existing TimeIO Things..."
                 )
+
             for feature, poly in region_features:
-                # (Keep existing Thing/Datastream/Observation logic)
                 region_name = feature.properties.get("name") or feature.feature_id
-                centroid = poly.centroid
 
-                thing_payload = {
-                    "name": f"Station {region_name}",
-                    "description": f"Monitoring Station for {region_name}",
-                    "properties": {
-                        "station_id": f"STATION_{feature.feature_id}",
-                        "region": region_name,
-                        "type": "river",
-                        "status": "active",
-                    },
-                    "Locations": [
-                        {
-                            "name": f"Loc {region_name}",
-                            "description": f"Location of {region_name}",
-                            "encodingType": "application/vnd.geo+json",
-                            "location": {
-                                "type": "Point",
-                                "coordinates": [centroid.x, centroid.y],
-                            },
-                        }
-                    ],
-                }
-
-                thing_id = ensure_frost_entity(
-                    "Things", thing_payload, force_recreate=False
-                )
+                # Check if thing exists by name
+                thing_name = f"Station {region_name}"
+                check_url = f"{FROST_URL}/Things?$filter=name eq '{thing_name}'"
+                thing_id = None
+                try:
+                    r = requests.get(check_url, timeout=SEED_TIMEOUT)
+                    if r.status_code == 200:
+                        val = r.json().get("value")
+                        if val:
+                            thing_id = val[0]["@iot.id"]
+                            logger.info(
+                                f"Found existing Thing {thing_name} (ID: {thing_id})"
+                            )
+                except Exception:
+                    pass
 
                 if thing_id:
                     # Update local prop
                     if not feature.properties:
                         feature.properties = {}
 
-                    # Log the update
-                    logger.info(
-                        f"Updating feature {feature.feature_id} with station_id {thing_id}"
-                    )
-
-                    # Force update
                     from sqlalchemy.orm.attributes import flag_modified
 
                     props = dict(feature.properties)
                     props["station_id"] = thing_id
                     feature.properties = props
-                    flag_modified(
-                        feature, "properties"
-                    )  # Ensure SQLAlchemy tracks the JSON change
+                    flag_modified(feature, "properties")
+                    logger.info(f"Linked {region_name} to FROST Thing ID: {thing_id}")
+                else:
+                    # [MOD] Be more flexible: try lookup by region name directly (e.g. "Station Region_1")
+                    # if the Feature ID was something else (e.g. "CZ01...").
+                    # This allows the synthetic TimeIO grid to match the GeoJSON features.
+                    idx_match = None
+                    if "region_" in feature.feature_id.lower():
+                        idx_match = feature.feature_id.split("_")[-1]
 
-                    ds_name = f"DS_{thing_id}_LEVEL"
-                    ds_payload = {
-                        "name": ds_name,
-                        "description": "Water Level Datastream",
-                        "observationType": "http://www.opengis.net/def/observationType/OGC-OM/2.0/OM_Measurement",
-                        "unitOfMeasurement": {
-                            "name": "Meter",
-                            "symbol": "m",
-                            "definition": "http://example.org",
-                        },
-                        "Thing": {"@iot.id": thing_id},
-                        "Sensor": {"@iot.id": sensor_id},
-                        "ObservedProperty": {"@iot.id": op_id},
-                    }
-                    ds_id = ensure_frost_entity("Datastreams", ds_payload)
-
-                    if ds_id:
-                        # Check observations (Reuse logic)
+                    if idx_match:
+                        alt_name = f"Station Region_{idx_match}"
                         try:
-                            cnt = requests.get(
-                                f"{FROST_URL}/Observations?$filter=Datastream/id eq {ds_id}&$count=true&$top=0",
+                            r = requests.get(
+                                f"{FROST_URL}/Things?$filter=name eq '{alt_name}'",
                                 timeout=SEED_TIMEOUT,
                             )
-                            if (
-                                cnt.status_code == 200
-                                and cnt.json().get("@iot.count", 0) == 0
-                            ):
-                                logger.info(f"Seeding observations for {ds_name}...")
-                                base_time = datetime.now(timezone.utc) - timedelta(
-                                    days=SEED_OBSERVATIONS_DAYS
+                            if r.status_code == 200 and r.json().get("value"):
+                                thing_id = r.json().get("value")[0]["@iot.id"]
+                                logger.info(
+                                    f"Found existing Thing via Alt Name {alt_name} (ID: {thing_id})"
                                 )
-                                total_points = (
-                                    SEED_OBSERVATIONS_DAYS
-                                    * 24
-                                    * 60
-                                    // SEED_OBSERVATIONS_INTERVAL_MIN
-                                )
-                                observations = []
-                                for i in range(total_points):
-                                    t = base_time + timedelta(
-                                        minutes=i * SEED_OBSERVATIONS_INTERVAL_MIN
-                                    )
-                                    val = 150 + random.uniform(-20, 20)
-                                    observations.append(
-                                        {
-                                            "phenomenonTime": t.isoformat(),
-                                            "result": round(val, 2),
-                                            "Datastream": {"@iot.id": ds_id},
-                                        }
-                                    )
 
-                                logger.info(
-                                    f"Inserting {len(observations)} observations individually..."
-                                )
-                                success_count = 0
-                                for idx, obs in enumerate(observations):
-                                    try:
-                                        resp = requests.post(
-                                            f"{FROST_URL}/Observations",
-                                            json=obs,
-                                            timeout=SEED_TIMEOUT,
-                                        )
-                                        if resp.status_code in [200, 201]:
-                                            success_count += 1
-                                        else:
-                                            if idx % 50 == 0:
-                                                logger.warning(
-                                                    f"Failed obs {idx}: {resp.status_code}"
-                                                )
-                                    except Exception as e:
-                                        logger.error(f"Error obs {idx}: {e}")
-                                logger.info(
-                                    f"Successfully inserted {success_count}/{len(observations)} observations."
-                                )
-                        except Exception as e:
-                            logger.error(f"Observation seed fail: {e}")
+                                if not feature.properties:
+                                    feature.properties = {}
+
+                                props = dict(feature.properties)
+                                props["station_id"] = thing_id
+                                feature.properties = props
+                                flag_modified(feature, "properties")
+                        except Exception:
+                            pass
+
+                if not thing_id:
+                    logger.warning(
+                        f"Thing {thing_name} not found in FROST. Waiting for TimeIO seeding?"
+                    )
 
             db.commit()
 
@@ -527,9 +464,9 @@ def seed_data(db: Session) -> None:
 
                 # Ensure DataStore exists
                 connection_params = {
-                    "host": "postgres",
+                    "host": "water-dp-postgres",
                     "port": "5432",
-                    "database": "water_data",
+                    "database": "water_app",
                     "user": "postgres",
                     "passwd": "postgres",
                     "dbtype": "postgis",
@@ -662,6 +599,50 @@ def seed_data(db: Session) -> None:
                         logger.warning(f"Failed to link sensor {sensor_id}: {e}")
                         # No need to rollback entire session
         # db.commit() # Already committed individually
+
+        # [USER REQUEST] Link ALL other available sensors (except 'unlinked') to Demo Project
+        logger.info(
+            "[SEEDING] Linking ALL other available sensors (excluding 'unlinked') to Demo Project..."
+        )
+        try:
+            # Fetch all things from FROST
+            r_all = requests.get(f"{FROST_URL}/Things", timeout=SEED_TIMEOUT)
+            if r_all.status_code == 200:
+                all_things = r_all.json().get("value", [])
+                for t in all_things:
+                    t_name = t.get("name", "")
+                    t_id = t.get("@iot.id")
+
+                    # 1. Skip if name contains "unlinked" (case-insensitive)
+                    if "unlinked" in t_name.lower():
+                        continue
+
+                    # 2. Skip if already linked (we can try insertion and ignore conflict)
+                    # Convert to string for DB
+                    s_id_str = str(t_id)
+
+                    try:
+                        with db.begin_nested():
+                            stmt = project_sensors.select().where(
+                                and_(
+                                    project_sensors.c.project_id == project.id,
+                                    project_sensors.c.sensor_id == s_id_str,
+                                )
+                            )
+                            if not db.execute(stmt).first():
+                                db.execute(
+                                    project_sensors.insert().values(
+                                        project_id=project.id, sensor_id=s_id_str
+                                    )
+                                )
+                                logger.info(
+                                    f"Auto-linked sensor '{t_name}' ({s_id_str}) to Demo Project."
+                                )
+                        db.commit()
+                    except Exception as ex:
+                        logger.warning(f"Failed to auto-link sensor {t_name}: {ex}")
+        except Exception as e:
+            logger.error(f"Error checking for additional sensors to link: {e}")
 
         if not db.query(Dashboard).filter(Dashboard.project_id == project.id).first():
             # Create Dashboard using project.id

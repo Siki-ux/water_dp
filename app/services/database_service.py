@@ -5,9 +5,13 @@ Database service for CRUD operations and data management.
 import logging
 from typing import Any, Dict, List, Optional
 
+import requests
+from geoalchemy2.shape import to_shape
+from shapely.geometry import shape
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.exceptions import DatabaseException, ResourceNotFoundException
 from app.models.geospatial import GeoFeature, GeoLayer
 from app.schemas.geospatial import (
@@ -216,58 +220,116 @@ class DatabaseService:
         Get all sensors (Things) that are spatially within the geometry of a layer's features.
         Assumes FROST schema Tables (THINGS, LOCATIONS) are present.
         """
-        from sqlalchemy import text
 
         # 1. Check if layer exists
         self.get_geo_layer(layer_name)
 
-        # 2. Perform Spatial Join
-        # Note: We join geo_features for the specific layer with FROST Locations
-        try:
-            query = text(
-                """
-                SELECT DISTINCT
-                    t."ID" as id,
-                    t."NAME" as name,
-                    t."DESCRIPTION" as description,
-                    ST_X(ST_Centroid(ST_GeomFromGeoJSON(l."LOCATION"::jsonb))) as lng,
-                    ST_Y(ST_Centroid(ST_GeomFromGeoJSON(l."LOCATION"::jsonb))) as lat
-                FROM "THINGS" t
-                JOIN "THINGS_LOCATIONS" tl ON t."ID" = tl."THING_ID"
-                JOIN "LOCATIONS" l ON tl."LOCATION_ID" = l."ID"
-                JOIN "geo_features" gf ON ST_Intersects(ST_GeomFromGeoJSON(l."LOCATION"::jsonb), gf.geometry)
-                WHERE gf.layer_id = :layer_name
-            """
-            )
+        # 2. Fetch all features for this layer
+        features = self.get_geo_features(layer_name, limit=10000)
 
-            result = self.db.execute(query, {"layer_name": layer_name})
+        if not features:
+            return []
+
+        try:
+            # 3. Build a combined geometry or PreparedGeometry for fast checking
+            # Using simple iteration for now, optimal for moderate complexity
+
+            # Convert all features to shapely shapes
+            polygons = []
+            for f in features:
+                try:
+                    s = to_shape(f.geometry)
+                    polygons.append(s)
+                except Exception:
+                    pass
+
+            if not polygons:
+                return []
+
+            # Create a MultiPolygon or just a list to check against
+            # Checking against ANY polygon
+            # For efficiency, we could union them, but that's expensive for complex grids.
+            # Let's fetch Things from FROST and simple check.
+
+            # 4. Fetch Things with Locations from FROST URL
+            frost_url = settings.frost_url
+            if not frost_url:
+                logger.warning("FROST_URL not set, cannot retrieve sensors.")
+                return []
+
+            # Use BBox of the layer to filter FROST query if possible?
+            # For now, fetch all Things (assuming < 10000 or using pages)
+            # Expand Locations to get geometry
 
             sensors = []
-            for row in result:
-                # Handle potential case sensitivity or type mismatch by dict access
-                # SQLAlchemy row is accessible by column name, but let's be safe
-                sensors.append(
-                    {
-                        "id": str(row[0]),  # Ensure ID is string (handle int/str IDs)
-                        "name": row[1],
-                        "description": row[2],
-                        "latitude": row[4],
-                        "longitude": row[3],
-                    }
-                )
+            next_link = f"{frost_url}/Things?$expand=Locations"
+
+            # Safety limit for pages
+            page_count = 0
+            max_pages = 20
+
+            while next_link and page_count < max_pages:
+                try:
+                    resp = requests.get(next_link, timeout=10)
+                    if resp.status_code != 200:
+                        logger.error(f"FROST Error: {resp.status_code} {resp.text}")
+                        break
+
+                    data = resp.json()
+                    things = data.get("value", [])
+                    next_link = data.get("@iot.nextLink")
+                    page_count += 1
+
+                    for thing in things:
+                        locations = thing.get("Locations", [])
+                        if not locations:
+                            continue
+
+                        # Use first location
+                        loc_entity = locations[0]
+                        loc_geo = loc_entity.get("location")
+
+                        if not loc_geo:
+                            continue
+
+                        # Parse GeoJSON location
+                        try:
+                            # Shapely shape from dict
+                            thing_point = shape(loc_geo)
+
+                            # Check intersection with ANY layer polygon
+                            # (Optimize: prep geometry if single, or just loop)
+                            match = False
+                            for poly in polygons:
+                                if poly.intersects(thing_point):
+                                    match = True
+                                    break
+
+                            if match:
+                                sensors.append(
+                                    {
+                                        "id": str(thing.get("@iot.id")),
+                                        "name": thing.get("name"),
+                                        "description": thing.get("description"),
+                                        "latitude": thing_point.y,
+                                        "longitude": thing_point.x,
+                                    }
+                                )
+                        except Exception as ex:
+                            logger.warning(
+                                f"Failed to parse location for thing {thing.get('@iot.id')}: {ex}"
+                            )
+                            continue
+
+                except Exception as e:
+                    logger.error(f"Error fetching from FROST: {e}")
+                    break
 
             return sensors
 
         except Exception as e:
-            logger.error(f"Failed to query sensors in layer {layer_name}: {e}")
-            # Identify if it's a table-not-found error (e.g. FROST not set up or lowercase tables)
-            if "relation" in str(e) and "does not exist" in str(e):
-                # Try lowercase fallback?
-                logger.warning(
-                    "FROST Tables not found in uppercase, checking lowercase fallback..."
-                )
-                # For now just re-raise, but good to know for debugging
-            raise DatabaseException(f"Failed to query sensors in layer: {e}")
+            logger.error(f"Failed to process sensors in layer {layer_name}: {e}")
+            raise DatabaseException(f"Failed to get sensors in layer: {e}")
 
     def get_layer_bbox(self, layer_name: str) -> Optional[List[float]]:
         """
