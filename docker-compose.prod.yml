@@ -168,7 +168,7 @@ services:
       - GEOSERVER_PASSWORD=${GEOSERVER_ADMIN_PASSWORD:-geoserver}
     depends_on:
       frost:
-        condition: service_started
+        condition: service_healthy
       postgres:
         condition: service_healthy
       api:
@@ -264,6 +264,12 @@ services:
       - timeio.env
     ports:
       - "8083:8080"
+    healthcheck:
+      test: [ "CMD", "curl", "--fail", "http://localhost:8080/FROST-Server/v1.1" ]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
     environment:
       - JAVA_OPTS=-Xms256m -Xmx768m
       - serviceRootUrl=http://localhost:8083/FROST-Server
