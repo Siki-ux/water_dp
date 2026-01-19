@@ -299,10 +299,9 @@ def seed_data(db: Session) -> None:
         FROST_URL = settings.frost_url
 
         # Check if FROST is actually reachable with retries
-        import time
-
         # Check if FROST is actually reachable with retries
         import time
+
         max_retries = 12
         for attempt in range(max_retries):
             try:

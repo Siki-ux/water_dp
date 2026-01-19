@@ -60,19 +60,16 @@ def init_db() -> None:
         from sqlalchemy import text
 
         from app.models import GeoFeature, GeoLayer  # noqa: F401
-        from sqlalchemy import text
 
         # Use checkfirst=True to avoid errors if tables already exist
         logger.info(
             f"Targeting tables for creation: {list(Base.metadata.tables.keys())}"
         )
 
-
         # Ensure PostGIS extension exists
         with engine.connect() as connection:
             connection.execute(text("CREATE EXTENSION IF NOT EXISTS postgis CASCADE;"))
             connection.commit()
-
 
         Base.metadata.create_all(bind=engine, checkfirst=True)
         logger.info("Database tables initialized successfully")
