@@ -161,6 +161,8 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy
+      api:
+        condition: service_healthy
     volumes:
       - ./app:/app/app
     networks:
@@ -169,20 +171,20 @@ services:
   # --- TimeIO Services ---
 
   # MQTT Broker (Mosquitto)
-  mqtt-broker:
-    image: iegomez/mosquitto-go-auth:latest
-    container_name: timeio_mqtt
-    env_file:
-      - timeio.env
-    ports:
-      - "1883:1883"
-    depends_on:
-      postgres:
-        condition: service_healthy
-    volumes:
-      - ./mosquitto.conf:/etc/mosquitto/mosquitto.conf:ro
-    networks:
-      - water_dp_network
+  # mqtt-broker:
+  #   image: iegomez/mosquitto-go-auth:latest
+  #   container_name: timeio_mqtt
+  #   env_file:
+  #     - timeio.env
+  #   ports:
+  #     - "1883:1883"
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   volumes:
+  #     - ./mosquitto.conf:/etc/mosquitto/mosquitto.conf:ro
+  #   networks:
+  #     - water_dp_network
 
   # Keycloak (Identity Provider)
   keycloak:

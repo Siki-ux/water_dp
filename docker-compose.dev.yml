@@ -74,7 +74,7 @@ services:
 
   # Water Data Platform API
   api:
-    image: ghcr.io/${GITHUB_REPOSITORY_LOWER}/water_dp_api:latest
+    build: .
     container_name: water_dp_api
     restart: unless-stopped
     environment:
@@ -100,7 +100,7 @@ services:
       - ACCESS_TOKEN_EXPIRE_MINUTES=30
       - LOG_LEVEL=INFO
       - KEYCLOAK_URL=http://keycloak:8080
-      - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL}
+      - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL:-http://${PUBLIC_HOSTNAME:-localhost}:8081}
       - KEYCLOAK_ADMIN_USERNAME=${KEYCLOAK_ADMIN:-admin}
       - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
       - FROST_URL=http://frost:8080/FROST-Server/v1.1
@@ -111,7 +111,7 @@ services:
       interval: 10s
       timeout: 10s
       retries: 60
-      start_period: 1200s
+      start_period: 120s
     depends_on:
       postgres:
         condition: service_healthy
@@ -123,13 +123,15 @@ services:
         condition: service_completed_successfully
       frost:
         condition: service_started
+    volumes:
+      - ./app:/app/app
     networks:
       - water_dp_network
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   # Celery Worker
   worker:
-    image: ghcr.io/${GITHUB_REPOSITORY_LOWER}/water_dp_worker:latest
+    build: .
     container_name: water_dp_worker
     restart: unless-stopped
     command: celery -A app.core.celery_app.celery_app worker --loglevel=info -Q imports,computations,celery
@@ -150,12 +152,14 @@ services:
         condition: service_started
       api:
         condition: service_healthy
+    volumes:
+      - ./app:/app/app
     networks:
       - water_dp_network
 
   # Simulator Service (Fake Sensor)
   simulator:
-    image: ghcr.io/${GITHUB_REPOSITORY_LOWER}/water_dp_simulator:latest
+    build: .
     container_name: water_dp_simulator
     restart: unless-stopped
     command: python -m app.core.simulator
@@ -173,6 +177,8 @@ services:
         condition: service_healthy
       api:
         condition: service_healthy
+    volumes:
+      - ./app:/app/app
     networks:
       - water_dp_network
 
@@ -302,16 +308,16 @@ services:
       - OIDC_CONF_URL=http://keycloak:8080/realms/timeio/.well-known/openid-configuration
       - OIDC_REALM=timeio
       - OIDC_CLIENT_ID=timeIO-client
-      - OIDC_ALLOWED_ISSUERS=["http://localhost:8081/realms/timeio","http://keycloak:8080/realms/timeio","${KEYCLOAK_EXTERNAL_URL}/realms/timeio"]
+      - OIDC_ALLOWED_ISSUERS=["http://localhost:8081/realms/timeio","http://keycloak:8080/realms/timeio","${KEYCLOAK_EXTERNAL_URL:-http://${PUBLIC_HOSTNAME:-localhost}:8081}/realms/timeio"]
       - OIDC_ALLOWED_AUDIENCES=["timeIO-client","account"]
       - ALLOWED_VOS=UFZ-TSM
       - DB_URL=postgresql://postgres:${DATABASE_PASSWORD:-postgres}@postgres/water_data
       - DB_SCHEMA=public
-      - THING_MANAGEMENT_API_DATABASE_PASS=${DATABASE_PASSWORD}
-      - THING_MANAGEMENT_API_DSN=postgresql://${DATABASE_USER}:${DATABASE_PASSWORD}@postgres/water_data
+      - THING_MANAGEMENT_API_DATABASE_PASS=${DATABASE_PASSWORD:-postgres}
+      - THING_MANAGEMENT_API_DSN=postgresql://${DATABASE_USER:-postgres}:${DATABASE_PASSWORD:-postgres}@postgres/water_data
       - THING_MANAGEMENT_MQTT_PASS=${MQTT_PASSWORD:-secure_mqtt_password}
-      - OIDC_ADMIN_PASSWORD=${DATABASE_PASSWORD}
-      - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL}
+      - OIDC_ADMIN_PASSWORD=${DATABASE_PASSWORD:-postgres}
+      - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL:-http://${PUBLIC_HOSTNAME:-localhost}:8081}
       - TIMEIO_URL=http://frost:8080/FROST-Server/v1.1
     depends_on:
       postgres:
@@ -325,7 +331,7 @@ services:
 
   # Thing Management DB Migrations
   thing-management-db-migrations:
-    image: ghcr.io/${GITHUB_REPOSITORY_LOWER}/water_dp_tm_migrations:latest
+    image: flyway/flyway:10
     container_name: timeio_tm_migrations
     environment:
       - FLYWAY_URL=jdbc:postgresql://postgres:5432/water_data
@@ -336,6 +342,8 @@ services:
       - FLYWAY_BASELINE_ON_MIGRATE=true
       - FLYWAY_BASELINE_VERSION=0
     command: -connectRetries=60 migrate
+    volumes:
+      - ./alembic/versions:/flyway/sql
     depends_on:
       postgres:
         condition: service_healthy
@@ -344,7 +352,7 @@ services:
 
   # Thing Management Seeder
   thing-management-seeder:
-    image: ghcr.io/${GITHUB_REPOSITORY_LOWER}/water_dp_tm_seeder:latest
+    image: registry.hzdr.de/ufz-tsm/thing-management/backend/thing-management-api:latest
     container_name: timeio_tm_seeder
     restart: "no"
     env_file:
@@ -355,6 +363,8 @@ services:
       - DB_URL=postgresql://postgres:${DATABASE_PASSWORD:-postgres}@postgres/water_data
       - DB_SCHEMA=public
     command: python /app/seed_thing_management.py
+    volumes:
+      - ./scripts/seed_thing_management.py:/app/seed_thing_management.py
     depends_on:
       postgres:
         condition: service_healthy
@@ -376,7 +386,7 @@ services:
       - APP_PORT=8080
       - API_URL=/api
       - APP_URL=http://${PUBLIC_HOSTNAME:-localhost}:8082
-      - OIDC_URL=${KEYCLOAK_EXTERNAL_URL}
+      - OIDC_URL=${KEYCLOAK_EXTERNAL_URL:-http://${PUBLIC_HOSTNAME:-localhost}:8081}
       - OIDC_REALM=timeio
       - OIDC_CLIENT_ID=timeIO-client
       - OIDC_REDIRECT_URL=http://${PUBLIC_HOSTNAME:-localhost}:8082/login/callback
