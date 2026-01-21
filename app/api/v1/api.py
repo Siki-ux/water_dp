@@ -16,6 +16,7 @@ from app.api.v1.endpoints import (
     projects,
     time_series,
     water_data,
+    groups,
 )
 
 api_router = APIRouter()
@@ -38,3 +39,4 @@ api_router.include_router(
 )
 api_router.include_router(datasources.router, tags=["datasources"])
 api_router.include_router(alerts.router, prefix="/alerts", tags=["alerts"])
+api_router.include_router(groups.router, prefix="/groups", tags=["groups"])

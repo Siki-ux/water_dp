@@ -68,19 +68,22 @@ class ProjectBase(PydanticBase):
 
 
 class ProjectCreate(ProjectBase):
-    authorization_provider_group_id: Optional[str] = None
+    authorization_provider_group_id: Optional[str] = None # Deprecated
+    authorization_group_ids: Optional[List[str]] = Field(default_factory=list)
 
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     description: Optional[str] = None
-    authorization_provider_group_id: Optional[str] = None
+    authorization_provider_group_id: Optional[str] = None # Deprecated
+    authorization_group_ids: Optional[List[str]] = None
 
 
 class ProjectResponse(ProjectBase):
     id: UUID
     owner_id: str
     authorization_provider_group_id: Optional[str] = None
+    authorization_group_ids: List[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

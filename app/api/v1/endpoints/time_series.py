@@ -25,6 +25,9 @@ from app.schemas.time_series import (
     TimeSeriesStatistics,
 )
 from app.services.time_series_service import TimeSeriesService
+from app.services.project_service import ProjectService
+from app.api import deps
+from typing import Annotated
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -43,6 +46,7 @@ async def create_time_series_metadata(
 
 @router.get("/metadata", response_model=TimeSeriesMetadataListResponse)
 async def get_time_series_metadata(
+    current_user: Annotated[dict, Depends(deps.get_current_user)],
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of records"),
     parameter: Optional[str] = Query(None, description="Filter by parameter"),
@@ -51,6 +55,19 @@ async def get_time_series_metadata(
     db: Session = Depends(get_db),
 ):
     """Get time series metadata with filtering."""
+    
+    # [SECURITY] Filter by User Access
+    allowed_ids = None
+    # Admins see all (optimization)
+    is_admin = ProjectService._is_admin(current_user)
+    if not is_admin:
+        allowed_ids = ProjectService.get_allowed_sensor_ids(db, current_user)
+        # If user has no access to any sensor, return empty immediately
+        if not allowed_ids:
+             return TimeSeriesMetadataListResponse(
+                series=[], total=0, skip=skip, limit=limit
+            )
+
     service = TimeSeriesService(db)
     metadata_list = service.get_time_series_metadata(
         skip=skip,
@@ -58,6 +75,7 @@ async def get_time_series_metadata(
         parameter=parameter,
         source_type=source_type,
         station_id=station_id,
+        allowed_ids=allowed_ids,
     )
 
     return TimeSeriesMetadataListResponse(

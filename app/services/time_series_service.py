@@ -426,6 +426,7 @@ class TimeSeriesService:
         parameter: Optional[str] = None,
         source_type: Optional[str] = None,
         station_id: Optional[str] = None,
+        allowed_ids: Optional[List[str]] = None,
     ) -> List[TimeSeriesMetadataResponse]:
         """Get time series metadata (Datastreams) from FROST Server."""
 
@@ -439,6 +440,25 @@ class TimeSeriesService:
 
         # Add filters
         filter_list = []
+        
+        # Access Control Filter
+        if allowed_ids is not None:
+            if not allowed_ids:
+                return []  # No allowed projects/sensors -> return empty
+            
+            # Construct OR filter for Thing IDs
+            # Note: This has URL length limits. For large datasets, consider other approaches.
+            or_clauses = []
+            for aid in allowed_ids:
+                if aid.isdigit():
+                    or_clauses.append(f"Thing/id eq {aid}")
+                else:
+                    safe = self._escape_odata_string(aid)
+                    or_clauses.append(f"Thing/id eq '{safe}'")
+            
+            if or_clauses:
+                filter_list.append(f"({' or '.join(or_clauses)})")
+
         if parameter:
             escaped_param = self._escape_odata_string(parameter)
             filter_list.append(f"ObservedProperty/name eq '{escaped_param}'")

@@ -132,3 +132,116 @@ class KeycloakService:
             logger.error(f"Error creating group '{group_name}' in Keycloak: {e}")
             cls._admin_client = None
             return None
+
+    @classmethod
+    def get_group(cls, group_id: str) -> Optional[dict]:
+        """Get group details by ID."""
+        try:
+            admin = cls.get_admin_client()
+            return admin.get_group(group_id=group_id)
+        except Exception as e:
+            logger.error(f"Error fetching group {group_id}: {e}")
+            cls._admin_client = None
+            return None
+
+    @classmethod
+    def get_group_by_name(cls, group_name: str) -> Optional[dict]:
+        """
+        Find group by name (exact match).
+        Note: specific handling for 'path' style names could be added here if needed.
+        """
+        try:
+            admin = cls.get_admin_client()
+            # 'search' param is a substring match
+            groups = admin.get_groups(query={"search": group_name})
+            for g in groups:
+                if g.get("name") == group_name:
+                    return g
+                # Fallback: if name is a path, we might need traversal, but let's assume flat or exact name for now
+            return None
+        except Exception as e:
+            logger.error(f"Error finding group by name '{group_name}': {e}")
+            cls._admin_client = None
+            return None
+
+    @classmethod
+    def get_group_members(cls, group_id: str) -> list:
+        """Get members of a group."""
+        try:
+            admin = cls.get_admin_client()
+            return admin.get_group_members(group_id=group_id)
+        except Exception as e:
+            logger.error(f"Error fetching members for group {group_id}: {e}")
+            cls._admin_client = None
+            return []
+
+    @classmethod
+    def add_user_to_group(cls, user_id: str, group_id: str):
+        """Add a user to a group."""
+        try:
+            admin = cls.get_admin_client()
+            admin.group_user_add(user_id=user_id, group_id=group_id)
+        except Exception as e:
+            logger.error(f"Error adding user {user_id} to group {group_id}: {e}")
+            cls._admin_client = None
+            raise
+
+    @classmethod
+    def remove_user_from_group(cls, user_id: str, group_id: str):
+        """Remove a user from a group."""
+        try:
+            admin = cls.get_admin_client()
+            admin.group_user_remove(user_id=user_id, group_id=group_id)
+        except Exception as e:
+            logger.error(f"Error removing user {user_id} from group {group_id}: {e}")
+            cls._admin_client = None
+            raise
+
+    @classmethod
+    def get_user_groups(cls, user_id: str) -> list:
+        """Get groups a user belongs to."""
+        try:
+            admin = cls.get_admin_client()
+            return admin.get_user_groups(user_id=user_id)
+        except Exception as e:
+            logger.error(f"Error fetching groups for user {user_id}: {e}")
+            cls._admin_client = None
+            return []
+
+    @classmethod
+    def get_client_id(cls, client_name: str) -> Optional[str]:
+        """Get client UUID by client_id (name)."""
+        try:
+            admin = cls.get_admin_client()
+            # This returns the internal UUID of the client
+            return admin.get_client_id(client_name)
+        except Exception as e:
+            logger.error(f"Error getting client ID for {client_name}: {e}")
+            cls._admin_client = None
+            return None
+
+    @classmethod
+    def get_client_role(cls, client_uuid: str, role_name: str) -> Optional[dict]:
+        """Get role representation for a client."""
+        try:
+            admin = cls.get_admin_client()
+            return admin.get_client_role(client_id=client_uuid, role_name=role_name)
+        except Exception as e:
+            logger.error(f"Error getting role {role_name} for client {client_uuid}: {e}")
+            cls._admin_client = None
+            return None
+
+    @classmethod
+    def assign_group_client_roles(cls, group_id: str, client_uuid: str, roles: list):
+        """Assign client roles to a group."""
+        try:
+            admin = cls.get_admin_client()
+            admin.assign_group_client_roles(
+                group_id=group_id,
+                client_id=client_uuid,
+                roles=roles
+            )
+        except Exception as e:
+            logger.error(f"Error assigning client roles {roles} to group {group_id}: {e}")
+            cls._admin_client = None
+            raise

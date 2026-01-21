@@ -411,17 +411,45 @@ def seed_data(db: Session) -> None:
 
         # Check if project exists
         project = db.query(Project).filter(Project.name == "Demo Project").first()
+        auth_group = "UFZ-TSM:MyProject"
+        
+        # [SECURITY] Ensure Keycloak Group Exists (Always check)
+        try:
+            from app.services.keycloak_service import KeycloakService
+            kc_group = KeycloakService.get_group_by_name(auth_group)
+            if not kc_group:
+                logger.info(f"Seeding Keycloak Group: {auth_group}")
+                _ = KeycloakService.create_group(auth_group)
+        except Exception as e:
+            logger.warning(f"Failed to seed Keycloak Group {auth_group}: {e}")
+
         if not project:
             logger.info("Seeding Demo Project...")
             project = Project(
                 name="Demo Project",
                 description="A sample project showing water levels.",
                 owner_id=DEMO_USER_ID,
-                authorization_provider_group_id="UFZ-TSM:MyProject",
+                authorization_provider_group_id=auth_group,
+                authorization_group_ids=[auth_group],
             )
             db.add(project)
             db.commit()
             db.refresh(project)
+        else:
+            # [FIX] Ensure existing project has correct Groups
+            needs_save = False
+            if not project.authorization_group_ids or auth_group not in project.authorization_group_ids:
+                logger.info(f"Updating Demo Project authorization groups to include {auth_group}")
+                current_groups = project.authorization_group_ids or []
+                if auth_group not in current_groups:
+                    current_groups.append(auth_group)
+                project.authorization_group_ids = current_groups
+                project.authorization_provider_group_id = auth_group # Legacy
+                needs_save = True
+            
+            if needs_save:
+                db.commit()
+                db.refresh(project)
 
         # Ensure Sensors are Linked (Idempotent)
         # Get some thing IDs from features
@@ -733,13 +761,35 @@ def seed_advanced_logic(db: Session):
     # 1. Add Siki to Demo Project
     p1 = db.query(Project).filter(Project.name == "Demo Project").first()
     if p1:
+        # [MOD] Try to find real Siki ID from Keycloak to ensure useful seeding
+        target_siki_id = SIKI_ID
+        try:
+            from app.services.keycloak_service import KeycloakService
+            real_siki = KeycloakService.get_user_by_username("siki")
+            if real_siki and real_siki.get("id"):
+                target_siki_id = real_siki["id"]
+                logger.info(f"Found real 'siki' user in Keycloak: {target_siki_id}")
+        except Exception as e:
+            logger.warning(f"Failed to lookup real 'siki' user: {e}")
+
         member = (
-            db.query(ProjectMember).filter_by(project_id=p1.id, user_id=SIKI_ID).first()
+            db.query(ProjectMember).filter_by(project_id=p1.id, user_id=target_siki_id).first()
         )
-        if not member:
-            logger.info(f"Adding Siki ({SIKI_ID}) to Demo Project...")
-            db.add(ProjectMember(project_id=p1.id, user_id=SIKI_ID, role="editor"))
-            db.commit()
+        # [ALWAYS SYNC] Check Keycloak Group Membership
+        # Even if DB member exists, Keycloak group might be missing user
+        try:
+             if p1.authorization_group_ids:
+                 for g_name in p1.authorization_group_ids:
+                     grp = KeycloakService.get_group_by_name(g_name)
+                     if grp:
+                         # Double check if user is already in group?
+                         # KeycloakService.add_user_to_group usually handles idempotency or throws error
+                         # We can just call it and catch exception
+                         KeycloakService.add_user_to_group(target_siki_id, grp["id"])
+                         logger.info(f"Ensured Siki is in Keycloak group {g_name}")
+        except Exception as e:
+             # Ignore if already member (409) or other benign errors
+             logger.warning(f"Keycloak sync note for Siki: {e}")
 
     # 2. Create Project 2
     p2 = db.query(Project).filter(Project.name == "Demo Project 2").first()
