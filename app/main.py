@@ -6,19 +6,23 @@ import logging
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response, status
+from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api.v1.api import api_router
 from app.core.config import settings
+from app.core.constants import API_DESCRIPTION
 from app.core.database import init_db
-from app.core.middleware import ErrorHandlingMiddleware
+from app.core.logging_config import setup_logging
+from app.core.middleware import ErrorHandlingMiddleware, LoggingMiddleware
 
-logging.basicConfig(
-    level=getattr(logging, settings.log_level.upper()),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
+# Setup Centralized Logging
+setup_logging()
+
+# Note: No need for BasicConfig or getLogger here, logging_config handles it.
+# But we can still get a logger if we want.
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,17 +42,17 @@ async def lifespan(app: FastAPI):
         from app.core.database import SessionLocal
         from app.core.system_datasources import register_system_datasources
 
-        db_sys = SessionLocal()
+        database_session = SessionLocal()
         try:
-            register_system_datasources(db_sys)
+            register_system_datasources(database_session)
         finally:
-            db_sys.close()
+            database_session.close()
 
         app.state.startup_complete = True
         logger.info("Application is now fully healthy and ready.")
 
-    except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
+    except Exception as error:
+        logger.error(f"Failed to initialize database: {error}")
         raise
 
     yield
@@ -59,25 +63,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     version=settings.version,
-    description="""
-    ## Water Data Platform API
-
-    A comprehensive backend for water data management with:
-
-    * **Database Integration**: PostgreSQL with PostGIS for geospatial data
-    * **GeoServer Integration**: Full geospatial services and layer management
-    * **Time Series Processing**: Advanced analytics and data processing
-    * **RESTful API**: Complete CRUD operations for all data types
-
-    ### Features
-    - 🗺️ **Geospatial Data**: Manage layers, features, and GeoServer integration
-    - 📊 **Water Data**: Stations, measurements, and quality data
-    - ⏰ **Time Series**: Advanced time series analysis and processing
-    - 🔍 **Analytics**: Statistical analysis, anomaly detection, and aggregation
-
-    ### Authentication
-    Integrated with Keycloak. Use the **Authorize** button to authenticate.
-    """,
+    description=API_DESCRIPTION,
     openapi_url=f"{settings.api_prefix}/openapi.json" if settings.debug else None,
     docs_url=f"{settings.api_prefix}/docs" if settings.debug else None,
     redoc_url=f"{settings.api_prefix}/redoc" if settings.debug else None,
@@ -132,9 +118,11 @@ async def health_check(response: Response):
     }
 
 
-app.add_middleware(ErrorHandlingMiddleware)
+# Middleware Stack (Executed Top to Bottom)
 
-logger.info(f"CORS origins: {settings.cors_origins_list}")
+
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
@@ -143,30 +131,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-app.add_middleware(
-    TrustedHostMiddleware, allowed_hosts=["*"]  # Configure this properly for production
-)
-
-
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    """Log all requests."""
-    start_time = time.time()
-
-    # Log request
-    if request.url.path != "/health":
-        logger.info(f"Request: {request.method} {request.url}")
-
-    # Process request
-    response = await call_next(request)
-
-    # Log response
-    process_time = time.time() - start_time
-    if request.url.path != "/health":
-        logger.info(f"Response: {response.status_code} - {process_time:.3f}s")
-
-    return response
+app.add_middleware(ErrorHandlingMiddleware)
+app.add_middleware(LoggingMiddleware)
 
 
 @app.get("/docs", tags=["General"])
@@ -197,9 +163,9 @@ async def root():
     - ❤️ **Health Check**: [Health Status](/health)
 
     ### Available Endpoints:
-    - **Water Data**: `/api/v1/water-data/` - Stations, measurements, quality data
-    - **Time Series**: `/api/v1/time-series/` - Time series data and analysis
+    - **Sensors**: `/api/v1/things/` - Sensor management (replacement for water-data)
     - **Geospatial**: `/api/v1/geospatial/` - Layers, features, GeoServer integration
+    - **Projects**: `/api/v1/projects/` - Project management
     """
     return {
         "message": "Water Data Platform API",
@@ -211,9 +177,9 @@ async def root():
             "openapi_json": f"{settings.api_prefix}/openapi.json",
         },
         "endpoints": {
-            "water_data": f"{settings.api_prefix}/water-data/",
-            "time_series": f"{settings.api_prefix}/time-series/",
+            "sensors": f"{settings.api_prefix}/things/",
             "geospatial": f"{settings.api_prefix}/geospatial/",
+            "projects": f"{settings.api_prefix}/projects/",
             "health": "/health",
         },
         "health_url": "/health",

@@ -1,9 +1,9 @@
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import AuthenticationException, ResourceNotFoundException
 from app.models.user_context import Dashboard
 from app.schemas.user_context import DashboardCreate, DashboardUpdate
 from app.services.project_service import ProjectService
@@ -41,15 +41,15 @@ class DashboardService:
         """
         dashboard = db.query(Dashboard).filter(Dashboard.id == dashboard_id).first()
         if not dashboard:
-            raise HTTPException(status_code=404, detail="Dashboard not found")
+            raise ResourceNotFoundException(message="Dashboard not found")
 
         if dashboard.is_public:
             return dashboard
 
         # Private: Check user access
         if not user:
-            raise HTTPException(
-                status_code=401, detail="Authentication required for private dashboard"
+            raise AuthenticationException(
+                message="Authentication required for private dashboard"
             )
 
         # Delegate to ProjectService to check role on parent project
@@ -77,7 +77,7 @@ class DashboardService:
     ) -> Dashboard:
         dashboard = db.query(Dashboard).filter(Dashboard.id == dashboard_id).first()
         if not dashboard:
-            raise HTTPException(status_code=404, detail="Dashboard not found")
+            raise ResourceNotFoundException(message="Dashboard not found")
 
         # Check write access to parent project
         ProjectService._check_access(
@@ -103,7 +103,7 @@ class DashboardService:
     ) -> Dashboard:
         dashboard = db.query(Dashboard).filter(Dashboard.id == dashboard_id).first()
         if not dashboard:
-            raise HTTPException(status_code=404, detail="Dashboard not found")
+            raise ResourceNotFoundException(message="Dashboard not found")
 
         # Check write access to parent project
         ProjectService._check_access(

@@ -39,9 +39,9 @@ router = APIRouter()
     status_code=201,
     dependencies=[Depends(has_role("admin"))],
 )
-async def create_geo_layer(layer: GeoLayerCreate, db: Session = Depends(get_db)):
+async def create_geo_layer(layer: GeoLayerCreate, database: Session = Depends(get_db)):
     """Create a new geospatial layer."""
-    db_service = DatabaseService(db)
+    db_service = DatabaseService(database)
     return db_service.create_geo_layer(layer)
 
 
@@ -55,11 +55,9 @@ async def get_geo_layers(
         None, description="Filter by publication status"
     ),
     is_public: Optional[bool] = Query(None, description="Filter by public access"),
-    db: Session = Depends(get_db),
+    database: Session = Depends(get_db),
 ):
-    """Get geospatial layers with filtering."""
     """Get geospatial layers with filtering (Proxy to GeoServer)."""
-    # [USER REQUEST] Get layers from GeoServer, not local DB.
     try:
         from app.services.geoserver_service import GeoServerService
 
@@ -80,20 +78,20 @@ async def get_geo_layers(
 
         # Map GeoServerLayerInfo to GeoLayerResponse (Mocking DB fields)
         mapped_layers = []
-        for i, gs_l in enumerate(gs_layers):
+        for index, gs_layer in enumerate(gs_layers):
             # Filtering
-            if workspace and gs_l.workspace != workspace:
+            if workspace and gs_layer.workspace != workspace:
                 continue
 
             mapped_layers.append(
                 {
-                    "id": i + 1,  # Dummy ID
-                    "layer_name": gs_l.name,
-                    "title": gs_l.title,
-                    "description": gs_l.abstract,
-                    "workspace": gs_l.workspace,
-                    "store_name": gs_l.store,
-                    "srs": gs_l.srs,
+                    "id": index + 1,  # Dummy ID
+                    "layer_name": gs_layer.name,
+                    "title": gs_layer.title,
+                    "description": gs_layer.abstract,
+                    "workspace": gs_layer.workspace,
+                    "store_name": gs_layer.store,
+                    "srs": gs_layer.srs,
                     "layer_type": "vector",  # Assumption or need better mapping
                     "geometry_type": "polygon",  # Assumption
                     "is_published": True,
@@ -113,18 +111,18 @@ async def get_geo_layers(
             layers=paged_layers, total=total, skip=skip, limit=limit
         )
 
-    except Exception as e:
+    except Exception as error:
         import traceback
 
         traceback.print_exc()
-        logger.error(f"Failed to fetch layers from GeoServer: {e}")
-        raise HTTPException(status_code=500, detail=f"GeoServer Proxy Error: {str(e)}")
+        logger.error(f"Failed to fetch layers from GeoServer: {error}")
+        raise HTTPException(status_code=500, detail=f"GeoServer Proxy Error: {str(error)}")
 
 
 @router.get("/layers/{layer_name}", response_model=GeoLayerResponse)
-async def get_geo_layer(layer_name: str, db: Session = Depends(get_db)):
+async def get_geo_layer(layer_name: str, database: Session = Depends(get_db)):
     """Get a specific geospatial layer."""
-    db_service = DatabaseService(db)
+    db_service = DatabaseService(database)
     return db_service.get_geo_layer(layer_name)
 
 
@@ -134,30 +132,30 @@ async def get_geo_layer(layer_name: str, db: Session = Depends(get_db)):
     dependencies=[Depends(has_role("admin"))],
 )
 async def update_geo_layer(
-    layer_name: str, layer_update: GeoLayerUpdate, db: Session = Depends(get_db)
+    layer_name: str, layer_update: GeoLayerUpdate, database: Session = Depends(get_db)
 ):
     """Update a geospatial layer."""
-    db_service = DatabaseService(db)
+    db_service = DatabaseService(database)
     return db_service.update_geo_layer(layer_name, layer_update)
 
 
 @router.delete(
     "/layers/{layer_name}", status_code=204, dependencies=[Depends(has_role("admin"))]
 )
-async def delete_geo_layer(layer_name: str, db: Session = Depends(get_db)):
+async def delete_geo_layer(layer_name: str, database: Session = Depends(get_db)):
     """Delete a geospatial layer."""
-    db_service = DatabaseService(db)
+    db_service = DatabaseService(database)
     db_service.delete_geo_layer(layer_name)
 
 
 @router.post("/features", response_model=GeoFeatureResponse, status_code=201)
 async def create_geo_feature(
     feature: GeoFeatureCreate,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    database: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
 ):
     """Create a new geospatial feature."""
-    db_service = DatabaseService(db)
+    db_service = DatabaseService(database)
     return db_service.create_geo_feature(feature)
 
 
@@ -171,10 +169,10 @@ async def get_geo_features(
     bbox: Optional[str] = Query(
         None, description="Bounding box (min_lon,min_lat,max_lon,max_lat)"
     ),
-    db: Session = Depends(get_db),
+    database: Session = Depends(get_db),
 ):
     """Get geospatial features with filtering."""
-    db_service = DatabaseService(db)
+    db_service = DatabaseService(database)
     features = db_service.get_geo_features(
         layer_name=layer_name,
         skip=skip,
@@ -186,7 +184,7 @@ async def get_geo_features(
 
     return FeatureListResponse(
         features=features,
-        total=len(features),  # Todo: implement count in service for pagination
+        total=len(features),  # TODO: implement count in service for pagination
         layer_name=layer_name,
         skip=skip,
         limit=limit,
@@ -197,10 +195,10 @@ async def get_geo_features(
 async def get_geo_feature(
     feature_id: str,
     layer_name: str = Query(..., description="Layer name"),
-    db: Session = Depends(get_db),
+    database: Session = Depends(get_db),
 ):
     """Get a specific geospatial feature."""
-    db_service = DatabaseService(db)
+    db_service = DatabaseService(database)
     return db_service.get_geo_feature(feature_id, layer_name)
 
 
@@ -209,11 +207,11 @@ async def update_geo_feature(
     feature_id: str,
     feature_update: GeoFeatureUpdate,
     layer_name: str = Query(..., description="Layer name"),
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    database: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
 ):
     """Update a geospatial feature."""
-    db_service = DatabaseService(db)
+    db_service = DatabaseService(database)
     return db_service.update_geo_feature(feature_id, layer_name, feature_update)
 
 
@@ -221,30 +219,30 @@ async def update_geo_feature(
 async def delete_geo_feature(
     feature_id: str,
     layer_name: str = Query(..., description="Layer name"),
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    database: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
 ):
     """Delete a geospatial feature."""
-    db_service = DatabaseService(db)
+    db_service = DatabaseService(database)
     db_service.delete_geo_feature(feature_id, layer_name)
 
 
 @router.post("/spatial-query", response_model=SpatialQueryResponse)
-async def spatial_query(query: SpatialQuery, db: Session = Depends(get_db)):
+async def spatial_query(query: SpatialQuery, database: Session = Depends(get_db)):
     """Perform spatial query on geospatial features."""
     try:
         # Note: You'll need to implement spatial_query in DatabaseService
         raise HTTPException(status_code=501, detail="Spatial query not yet implemented")
-    except Exception as e:
-        logger.error(f"Failed to perform spatial query: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as error:
+        logger.error(f"Failed to perform spatial query: {error}")
+        raise HTTPException(status_code=500, detail=str(error))
 
 
 @router.post(
     "/geoserver/publish", status_code=201, dependencies=[Depends(has_role("admin"))]
 )
 async def publish_layer_to_geoserver(
-    request: LayerPublishRequest, db: Session = Depends(get_db)
+    request: LayerPublishRequest, database: Session = Depends(get_db)
 ):
     """Publish a layer to GeoServer."""
     geoserver_service = GeoServerService()
@@ -266,7 +264,7 @@ async def publish_layer_to_geoserver(
     "/geoserver/unpublish", status_code=204, dependencies=[Depends(has_role("admin"))]
 )
 async def unpublish_layer_from_geoserver(
-    request: LayerUnpublishRequest, db: Session = Depends(get_db)
+    request: LayerUnpublishRequest, database: Session = Depends(get_db)
 ):
     """Unpublish a layer from GeoServer."""
     try:
@@ -279,9 +277,9 @@ async def unpublish_layer_from_geoserver(
             return {"message": f"Layer {request.layer_name} unpublished successfully"}
         else:
             raise HTTPException(status_code=500, detail="Failed to unpublish layer")
-    except Exception as e:
-        logger.error(f"Failed to unpublish layer from GeoServer: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as error:
+        logger.error(f"Failed to unpublish layer from GeoServer: {error}")
+        raise HTTPException(status_code=500, detail=str(error))
 
 
 @router.get("/geoserver/layers")
@@ -323,9 +321,9 @@ async def get_geoserver_layer_info(
         return layer_info
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Failed to get GeoServer layer info: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as error:
+        logger.error(f"Failed to get GeoServer layer info: {error}")
+        raise HTTPException(status_code=500, detail=str(error))
 
 
 @router.get("/geoserver/layers/{layer_name}/capabilities")
@@ -344,9 +342,9 @@ async def get_layer_capabilities(
         return capabilities
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Failed to get layer capabilities: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as error:
+        logger.error(f"Failed to get layer capabilities: {error}")
+        raise HTTPException(status_code=500, detail=str(error))
 
 
 @router.get("/geoserver/layers/{layer_name}/wms-url")
@@ -369,7 +367,7 @@ async def get_wms_url(
         bbox_tuple = None
         if bbox:
             try:
-                coords = [float(x) for x in bbox.split(",")]
+                coords = [float(coordinate) for coordinate in bbox.split(",")]
                 if len(coords) == 4:
                     bbox_tuple = tuple(coords)
             except ValueError:
@@ -388,9 +386,9 @@ async def get_wms_url(
         return {"wms_url": wms_url}
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Failed to generate WMS URL: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as error:
+        logger.error(f"Failed to generate WMS URL: {error}")
+        raise HTTPException(status_code=500, detail=str(error))
 
 
 @router.get("/geoserver/layers/{layer_name}/wfs-url")
@@ -408,9 +406,9 @@ async def get_wfs_url(
         )
 
         return {"wfs_url": wfs_url}
-    except Exception as e:
-        logger.error(f"Failed to generate WFS URL: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as error:
+        logger.error(f"Failed to generate WFS URL: {error}")
+        raise HTTPException(status_code=500, detail=str(error))
 
 
 @router.get("/geoserver/layers/{layer_name}/geojson")
@@ -431,9 +429,9 @@ async def get_layer_geojson(
         return features
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Failed to get layer GeoJSON: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as error:
+        logger.error(f"Failed to get layer GeoJSON: {error}")
+        raise HTTPException(status_code=500, detail=str(error))
 
 
 @router.get("/layers/{layer_name}/sensors")
@@ -446,9 +444,9 @@ async def get_sensors_in_layer(
         db_service = DatabaseService(db)
         sensors = db_service.get_sensors_in_layer(layer_name)
         return sensors
-    except Exception as e:
-        logger.error(f"Failed to get sensors in layer {layer_name}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as error:
+        logger.error(f"Failed to get sensors in layer {layer_name}: {error}")
+        raise HTTPException(status_code=500, detail=str(error))
 
 
 @router.get("/layers/{layer_name}/bbox")
@@ -465,6 +463,6 @@ async def get_layer_bbox(
         return {"bbox": bbox}
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Failed to get bbox for layer {layer_name}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as error:
+        logger.error(f"Failed to get bbox for layer {layer_name}: {error}")
+        raise HTTPException(status_code=500, detail=str(error))

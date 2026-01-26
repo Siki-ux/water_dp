@@ -6,7 +6,6 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.alerts import Alert, AlertDefinition
-from app.services.time_series_service import TimeSeriesService
 
 logger = logging.getLogger(__name__)
 
@@ -25,20 +24,49 @@ class ComputationContext:
         self.script_id = script_id
         self.params = params
         self._alerts_triggered: List[Dict[str, Any]] = []
-        self._ts_service = TimeSeriesService(db)
+
+        # Initialize FrostClient
+        # Note: If computations run in a multi-tenant environment,
+        # we might need to resolve the specific project URL from params.
+        # For legacy compatibility, we use the global setting.
+        from app.core.config import settings
+        from app.services.timeio.frost_client import FrostClient
+
+        self._frost_client = FrostClient(base_url=settings.frost_url)
 
     def get_sensor_data(self, sensor_id: str, limit: int = 1) -> List[Dict[str, Any]]:
         """
         Fetch latest data for a sensor (Thing ID).
-        Proxy to TimeSeriesService.
+        Proxy to FrostClient.
         """
         try:
-            # We assume sensor_id is the string ID used in FROST
-            # The service handles mapping to internal ID if needed
-            data = self._ts_service.get_latest_data(sensor_id)
-            if limit > 0 and len(data) > limit:
-                return data[:limit]
-            return data
+            # Note: TSM/FROST structure usually requires querying Datastreams for data,
+            # not just "Thing ID".
+            # TimeSeriesService.get_latest_data(sensor_id) was doing some magic or
+            # likely fetching observations for datastreams of that thing.
+            # FrostClient `get_observations` needs a Datastream ID.
+
+            # Helper to find datastreams for a thing
+            datastreams = self._frost_client.list_datastreams(thing_id=sensor_id)
+            if not datastreams:
+                return []
+
+            # Fetch latest observation for the first datastream (or all?)
+            # Legacy expected a list of Dicts.
+            # Let's aggregate from all datastreams of this thing?
+
+            all_obs = []
+            for ds in datastreams:
+                ds_id = ds.get("@iot.id")
+                obs = self._frost_client.get_observations(
+                    datastream_id=ds_id, limit=limit
+                )
+                all_obs.extend(obs)
+
+            # Sort by time desc
+            all_obs.sort(key=lambda x: x.get("phenomenonTime"), reverse=True)
+            return all_obs[:limit]
+
         except Exception as e:
             logger.error(f"Context Error fetching data for {sensor_id}: {e}")
             return []
@@ -49,7 +77,7 @@ class ComputationContext:
         For now, returns the Thing's properties which represents the dataset.
         """
         try:
-            thing = self._ts_service.get_station(dataset_id)
+            thing = self._frost_client.get_thing(dataset_id)
             return thing if thing else {}
         except Exception as e:
             logger.error(f"Context Error fetching dataset {dataset_id}: {e}")

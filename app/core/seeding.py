@@ -319,8 +319,7 @@ def seed_data(db: Session) -> None:
             )
 
             # Things/Datastreams
-            # [CONSUMER CHANGE] TimeIO Stack owns Thing Creation.
-            # We skip creating "Station X" things here.
+            # TimeIO Stack owns Thing Creation, so we skip creating "Station X" things here.
             # However, we still iterate regions to Update Local GeoFeature Props with IDs if found.
 
             if region_features:
@@ -360,7 +359,7 @@ def seed_data(db: Session) -> None:
                     flag_modified(feature, "properties")
                     logger.info(f"Linked {region_name} to FROST Thing ID: {thing_id}")
                 else:
-                    # [MOD] Be more flexible: try lookup by region name directly (e.g. "Station Region_1")
+                    # Try lookup by region name directly (e.g. "Station Region_1")
                     # if the Feature ID was something else (e.g. "CZ01...").
                     # This allows the synthetic TimeIO grid to match the GeoJSON features.
                     idx_match = None
@@ -398,10 +397,8 @@ def seed_data(db: Session) -> None:
             db.commit()
 
         # 5. Publish to GeoServer - SKIPPED
-        # [MODIFIED] We no longer publish layers from water_dp seeding.
         # GeoServer is now independent and seeded via geoserver_stack/scripts/seed_geoserver.py.
         # This prevents overwriting the DataStore configuration.
-        logger.info("Skipping GeoServer publication (managed by geoserver_stack).")
 
         # -------------------------------------------------------------------------
         # PART 3: Seed User Context (Projects, Dashboards)
@@ -412,10 +409,11 @@ def seed_data(db: Session) -> None:
         # Check if project exists
         project = db.query(Project).filter(Project.name == "Demo Project").first()
         auth_group = "UFZ-TSM:MyProject"
-        
+
         # [SECURITY] Ensure Keycloak Group Exists (Always check)
         try:
             from app.services.keycloak_service import KeycloakService
+
             kc_group = KeycloakService.get_group_by_name(auth_group)
             if not kc_group:
                 logger.info(f"Seeding Keycloak Group: {auth_group}")
@@ -438,15 +436,20 @@ def seed_data(db: Session) -> None:
         else:
             # [FIX] Ensure existing project has correct Groups
             needs_save = False
-            if not project.authorization_group_ids or auth_group not in project.authorization_group_ids:
-                logger.info(f"Updating Demo Project authorization groups to include {auth_group}")
+            if (
+                not project.authorization_group_ids
+                or auth_group not in project.authorization_group_ids
+            ):
+                logger.info(
+                    f"Updating Demo Project authorization groups to include {auth_group}"
+                )
                 current_groups = project.authorization_group_ids or []
                 if auth_group not in current_groups:
                     current_groups.append(auth_group)
                 project.authorization_group_ids = current_groups
-                project.authorization_provider_group_id = auth_group # Legacy
+                project.authorization_provider_group_id = auth_group  # Legacy
                 needs_save = True
-            
+
             if needs_save:
                 db.commit()
                 db.refresh(project)
@@ -503,10 +506,7 @@ def seed_data(db: Session) -> None:
                         # No need to rollback entire session
         # db.commit() # Already committed individually
 
-        # [USER REQUEST] Link ALL other available sensors (except 'unlinked') to Demo Project
-        logger.info(
-            "[SEEDING] Linking ALL other available sensors (excluding 'unlinked') to Demo Project..."
-        )
+        # Link ALL other available sensors (except 'unlinked') to Demo Project
         try:
             # Fetch all things from FROST
             r_all = requests.get(f"{FROST_URL}/Things", timeout=SEED_TIMEOUT)
@@ -761,10 +761,11 @@ def seed_advanced_logic(db: Session):
     # 1. Add Siki to Demo Project
     p1 = db.query(Project).filter(Project.name == "Demo Project").first()
     if p1:
-        # [MOD] Try to find real Siki ID from Keycloak to ensure useful seeding
+        # Try to find real Siki ID from Keycloak to ensure useful seeding
         target_siki_id = SIKI_ID
         try:
             from app.services.keycloak_service import KeycloakService
+
             real_siki = KeycloakService.get_user_by_username("siki")
             if real_siki and real_siki.get("id"):
                 target_siki_id = real_siki["id"]
@@ -772,24 +773,26 @@ def seed_advanced_logic(db: Session):
         except Exception as e:
             logger.warning(f"Failed to lookup real 'siki' user: {e}")
 
-        member = (
-            db.query(ProjectMember).filter_by(project_id=p1.id, user_id=target_siki_id).first()
+        (
+            db.query(ProjectMember)
+            .filter_by(project_id=p1.id, user_id=target_siki_id)
+            .first()
         )
         # [ALWAYS SYNC] Check Keycloak Group Membership
         # Even if DB member exists, Keycloak group might be missing user
         try:
-             if p1.authorization_group_ids:
-                 for g_name in p1.authorization_group_ids:
-                     grp = KeycloakService.get_group_by_name(g_name)
-                     if grp:
-                         # Double check if user is already in group?
-                         # KeycloakService.add_user_to_group usually handles idempotency or throws error
-                         # We can just call it and catch exception
-                         KeycloakService.add_user_to_group(target_siki_id, grp["id"])
-                         logger.info(f"Ensured Siki is in Keycloak group {g_name}")
+            if p1.authorization_group_ids:
+                for g_name in p1.authorization_group_ids:
+                    grp = KeycloakService.get_group_by_name(g_name)
+                    if grp:
+                        # Double check if user is already in group?
+                        # KeycloakService.add_user_to_group usually handles idempotency or throws error
+                        # We can just call it and catch exception
+                        KeycloakService.add_user_to_group(target_siki_id, grp["id"])
+                        logger.info(f"Ensured Siki is in Keycloak group {g_name}")
         except Exception as e:
-             # Ignore if already member (409) or other benign errors
-             logger.warning(f"Keycloak sync note for Siki: {e}")
+            # Ignore if already member (409) or other benign errors
+            logger.warning(f"Keycloak sync note for Siki: {e}")
 
     # 2. Create Project 2
     p2 = db.query(Project).filter(Project.name == "Demo Project 2").first()

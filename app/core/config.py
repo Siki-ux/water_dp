@@ -76,7 +76,14 @@ class Settings(BaseSettings):
 
     # Monitoring
     sentry_dsn: Optional[str] = Field(default=None, alias="SENTRY_DSN")
+    # Monitoring
+    sentry_dsn: Optional[str] = Field(default=None, alias="SENTRY_DSN")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    sqlalchemy_log_level: str = Field(default="WARNING", alias="SQLALCHEMY_LOG_LEVEL")
+    log_format: str = Field(default="console", alias="LOG_FORMAT")
+    enable_external_logging: bool = Field(
+        default=False, alias="ENABLE_EXTERNAL_LOGGING"
+    )
 
     # Celery
     celery_broker_url: str = Field(
@@ -84,6 +91,26 @@ class Settings(BaseSettings):
     )
     celery_result_backend: str = Field(
         default="redis://localhost:6379/0", alias="CELERY_RESULT_BACKEND"
+    )
+
+    # TimeIO Integration
+    thing_management_api_url: str = Field(
+        default="http://thing-management-api:8002", alias="THING_MANAGEMENT_API_URL"
+    )
+    timeio_db_host: str = Field(default="localhost", alias="TIMEIO_DB_HOST")
+    timeio_db_port: int = Field(default=5432, alias="TIMEIO_DB_PORT")
+    timeio_db_user: str = Field(default="postgres", alias="TIMEIO_DB_USER")
+    timeio_db_password: str = Field(default="postgres", alias="TIMEIO_DB_PASSWORD")
+    timeio_db_name: str = Field(default="postgres", alias="TIMEIO_DB_NAME")
+    mqtt_broker_host: str = Field(default="mqtt-broker", alias="MQTT_BROKER_HOST")
+    mqtt_username: str = Field(default="frontendbus", alias="MQTT_USERNAME")
+    mqtt_password: str = Field(default="frontendbus", alias="MQTT_PASSWORD")
+    topic_config_db_update: str = Field(
+        default="configdb_update", alias="TOPIC_CONFIG_DB_UPDATE"
+    )
+    fernet_encryption_secret: str = Field(
+        default="CKoB---DEFAULT-DUMMY-SECRET---0exKVH0QDLy1B=",
+        alias="FERNET_ENCRYPTION_SECRET",
     )
 
     model_config = {"env_file": ".env", "case_sensitive": False}
@@ -116,6 +143,11 @@ class Settings(BaseSettings):
                 with_params = self.database_url.split("/")[-1]
                 return with_params.split("?")[0]
             return "water_app"
+
+    # Thing Management & Verification
+    thing_management_api_url: str = Field(
+        default="http://thing-management-api:8002", alias="THING_MANAGEMENT_API_URL"
+    )
 
 
 # Global settings instance

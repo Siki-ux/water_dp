@@ -1,75 +1,44 @@
-"""
-Authentication and token management endpoints.
-"""
+from typing import Any, Dict
 
-import logging
-from typing import Any
-
-import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from fastapi.security import OAuth2PasswordRequestForm
 
-from app.core.config import settings
-
-logger = logging.getLogger(__name__)
+from app.api import deps
+from app.schemas.auth import LoginRequest, TokenRefreshRequest, TokenSchema
+from app.services.keycloak_service import KeycloakService
 
 router = APIRouter()
 
 
-@router.post("/token")
-async def login_for_access_token(
+@router.post("/token", response_model=TokenSchema)
+def login_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
-) -> Any:
+) -> Dict[str, Any]:
     """
-    Proxy token request to Keycloak.
-    Enables Swagger UI to authenticate directly with Keycloak via the API.
+    OAuth2 compatible token login, get an access token for future requests.
     """
-    token_url = f"{settings.keycloak_url}/realms/{settings.keycloak_realm}/protocol/openid-connect/token"
+    return KeycloakService.login_user(form_data.username, form_data.password)
 
-    payload = {
-        "grant_type": "password",
-        "client_id": settings.keycloak_client_id,
-        "username": form_data.username,
-        "password": form_data.password,
-        "scope": "openid profile email",
-    }
 
-    # Optional: Add client_secret if your client is not public
-    logger.info(f"Proxying token request to: {token_url}")
-    logger.info("Payload (no pass): {k:v for k,v in payload.items() if k!='password'}")
+@router.post("/login", response_model=TokenSchema)
+def login(request: LoginRequest) -> Dict[str, Any]:
+    """
+    Login with username and password to obtain access and refresh tokens.
+    """
+    return KeycloakService.login_user(request.username, request.password)
 
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                token_url,
-                data=payload,
-                timeout=10.0,
-            )
-            logger.info(f"Keycloak response: {response.status_code}")
 
-            if response.status_code != 200:
-                logger.error(
-                    f"Keycloak token exchange failed: {response.status_code} - {response.text}"
-                )
-                try:
-                    error_data = response.json()
-                    detail = error_data.get(
-                        "error_description", "Authentication failed"
-                    )
-                except Exception:
-                    detail = "Authentication service returned an error"
+@router.post("/refresh", response_model=TokenSchema)
+def refresh_token(request: TokenRefreshRequest) -> Dict[str, Any]:
+    """
+    Refresh an access token using a valid refresh token.
+    """
+    return KeycloakService.refresh_user_token(request.refresh_token)
 
-                raise HTTPException(
-                    status_code=response.status_code,
-                    detail=detail,
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
 
-            return response.json()
-
-    except httpx.RequestError as exc:
-        logger.error(f"Connection error to Keycloak: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Authentication service is currently unavailable",
-        )
+@router.get("/me", response_model=Dict[str, Any])
+def check_session(current_user: Dict[str, Any] = Depends(deps.get_current_user)):
+    """
+    Check current session validity and return user details.
+    """
+    return current_user

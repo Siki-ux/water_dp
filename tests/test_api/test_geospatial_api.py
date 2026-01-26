@@ -40,7 +40,17 @@ def test_create_geo_layer(client):
     with patch("app.api.v1.endpoints.geospatial.DatabaseService") as MockService:
         MockService.return_value.create_geo_layer.return_value = mock_layer
 
+        # Override admin requirement
+        from app.api.deps import has_role
+        from app.main import app
+
+        app.dependency_overrides[has_role("admin")] = lambda: {"sub": "admin"}
+
         response = client.post("/api/v1/geospatial/layers", json=data)
+
+        # Cleanup override
+        app.dependency_overrides.pop(has_role("admin"), None)
+
         assert response.status_code == 201
         assert response.json()["layer_name"] == "NewLayer"
 
@@ -77,6 +87,14 @@ def test_create_geo_feature_error(client):
             "DB Fail"
         )
 
+        from app.api.deps import get_current_user
+        from app.main import app
+
+        app.dependency_overrides[get_current_user] = lambda: {"sub": "user-1"}
+
         response = client.post("/api/v1/geospatial/features", json=data)
+
+        app.dependency_overrides.pop(get_current_user, None)
+
         assert response.status_code == 500
-        assert response.json()["detail"] == "Database operation failed"
+        assert response.json()["error"]["message"] == "Database operation failed"

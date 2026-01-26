@@ -8,7 +8,6 @@ from app.api import deps
 from app.main import app
 from app.schemas.user_context import (
     DashboardResponse,
-    ProjectMemberResponse,
     ProjectResponse,
 )
 
@@ -56,7 +55,12 @@ def test_create_project(client, normal_user_token, mock_project_service):
     )
 
     response = client.post(
-        "/api/v1/projects/", json={"name": "My Project", "description": "Test Project"}
+        "/api/v1/projects/",
+        json={
+            "name": "My Project",
+            "description": "Test Project",
+            "authorization_provider_group_id": "group-123",
+        },
     )
 
     assert response.status_code == 201
@@ -105,35 +109,7 @@ def mock_keycloak_service():
         yield mock
 
 
-def test_project_members(
-    client, normal_user_token, mock_project_service, mock_keycloak_service
-):
-    pid = uuid4()
-    mock_project_service.list_members.return_value = []
-
-    # List
-    response = client.get(f"/api/v1/projects/{pid}/members")
-    assert response.status_code == 200
-    assert response.json() == []
-
-    # Add
-    mock_project_service.add_member.return_value = ProjectMemberResponse(
-        id=uuid4(),
-        project_id=pid,
-        user_id="other",
-        role="viewer",
-        created_at="2024-01-01",
-        updated_at="2024-01-01",
-    )
-
-    # Mock Keycloak lookup for username case (if used, though here user_id is provided directly)
-    # The endpoint imports KeycloakService. If it wasn't mocked, it might try to init and fail
-    # if setup code runs on import or usage.
-
-    resp_add = client.post(
-        f"/api/v1/projects/{pid}/members", json={"user_id": "other", "role": "viewer"}
-    )
-    assert resp_add.status_code == 200
+# Member management via projects API is disabled.
 
 
 def test_dashboard_creation(client, normal_user_token, mock_dashboard_service):

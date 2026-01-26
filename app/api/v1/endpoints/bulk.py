@@ -61,10 +61,10 @@ async def import_geojson(file: UploadFile = File(...)):
         if os.path.exists(file_path):
             os.remove(file_path)
         raise
-    except Exception as e:
+    except Exception as error:
         if os.path.exists(file_path):
             os.remove(file_path)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(error))
 
 
 @router.post(

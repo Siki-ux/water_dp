@@ -1,25 +1,56 @@
+"""
+Project Service - Manages project CRUD, members, and sensor associations.
+
+.. deprecated::
+    Some methods in this service will be migrated to use the TimeIO service layer in v2.
+    For direct TimeIO operations, use `app.services.timeio` module.
+"""
+
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import HTTPException
+import requests
 from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
+from app.core.exceptions import (
+    AuthorizationException,
+    ResourceNotFoundException,
+    ValidationException,
+)
 from app.models.user_context import Project, ProjectMember, project_sensors
 from app.schemas.user_context import (
     ProjectCreate,
     ProjectMemberCreate,
     ProjectMemberResponse,
     ProjectUpdate,
-    SensorCreate,
+)
+
+# Import TimeIO service layer for enhanced operations
+from app.services.timeio import (
+    TimeIODatabase,
 )
 
 logger = logging.getLogger(__name__)
 
 
 class ProjectService:
+    """
+    Project management service.
+
+    .. note::
+        Methods interacting with TimeIO will use the new service layer internally
+        while maintaining backward compatibility with existing endpoints.
+    """
+
+    @staticmethod
+    def _get_timeio_db() -> TimeIODatabase:
+        """Get TimeIO database client for applying fixes."""
+        return TimeIODatabase()
+
     @staticmethod
     def _is_admin(user: Dict[str, Any]) -> bool:
         """Check if user has admin role."""
@@ -43,7 +74,7 @@ class ProjectService:
         """
         project = db.query(Project).filter(Project.id == project_id).first()
         if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise ResourceNotFoundException(message="Project not found")
 
         if ProjectService._is_admin(user):
             logger.info(f"Admin access granted for project {project_id}")
@@ -78,32 +109,28 @@ class ProjectService:
 
         # Sanitize
         sanitized_groups = []
-        for g in user_groups:
-            if g:
-                g_str = str(g)
-                if g_str.startswith("urn:geant:params:group:"):
-                    g_str = g_str.replace("urn:geant:params:group:", "")
-                if g_str.startswith("/"):
-                    g_str = g_str[1:]
-                sanitized_groups.append(g_str)
+        for group_name in user_groups:
+            if group_name:
+                group_str = str(group_name)
+                if group_str.startswith("urn:geant:params:group:"):
+                    group_str = group_str.replace("urn:geant:params:group:", "")
+                if group_str.startswith("/"):
+                    group_str = group_str[1:]
+                sanitized_groups.append(group_str)
 
         if (
-            (project.authorization_provider_group_id
-            and project.authorization_provider_group_id in sanitized_groups)
-            or
-            (project.authorization_group_ids
-             and any(gid in sanitized_groups for gid in project.authorization_group_ids))
+            project.authorization_provider_group_id
+            and project.authorization_provider_group_id in sanitized_groups
         ):
             logger.info(
-                f"Access granted via group overlap. User groups: {sanitized_groups}, "
-                f"Project groups: {project.authorization_group_ids}, "
-                f"Provider group: {project.authorization_provider_group_id}"
+                f"Access granted via group match. User groups: {sanitized_groups}, "
+                f"Project group: {project.authorization_provider_group_id}"
             )
             return project
-            
+
         logger.warning(
             f"Group access failed. User sanitized groups: {sanitized_groups}. "
-            f"Project auth groups: {project.authorization_group_ids}"
+            f"Project group: {project.authorization_provider_group_id}"
         )
 
         # 3. Member Access
@@ -118,8 +145,8 @@ class ProjectService:
 
         if not member:
             logger.warning(f"User {user_id} is not a member of project {project_id}")
-            raise HTTPException(
-                status_code=403, detail="Not authorized to access this project"
+            raise AuthorizationException(
+                message="Not authorized to access this project"
             )
 
         logger.info(f"User {user_id} access granted as member with role {member.role}")
@@ -132,9 +159,8 @@ class ProjectService:
             allowed_roles.append("viewer")
 
         if member.role not in allowed_roles:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Insufficient permissions ({required_role} required)",
+            raise AuthorizationException(
+                message=f"Insufficient permissions ({required_role} required)",
             )
 
         return project
@@ -144,91 +170,64 @@ class ProjectService:
         db: Session, project_in: ProjectCreate, user: Dict[str, Any]
     ) -> Project:
         user_id = user.get("sub")
-        
-        # Determine Authorization Groups
-        # Support both legacy single ID and new List
-        auth_group_ids = project_in.authorization_group_ids or []
-        if project_in.authorization_provider_group_id:
-            auth_group_ids.append(project_in.authorization_provider_group_id)
-        
-        # Remove duplicates
-        auth_group_ids = list(set(auth_group_ids))
-        
-        if auth_group_ids:
-            # Validate: User must be a member of ALL groups (unless admin)
+
+        # Validate Group Membership
+        auth_group_id = project_in.authorization_provider_group_id
+        if auth_group_id:
+            # Validate: User must be a member of the group (unless admin)
             if not ProjectService._is_admin(user):
                 # Extract and sanitize user groups
                 raw_groups = user.get("groups", [])
                 if not isinstance(raw_groups, list):
                     raw_groups = [raw_groups]
-                
+
                 entitlements = user.get("eduperson_entitlement", [])
                 if isinstance(entitlements, list):
                     raw_groups.extend(entitlements)
                 elif entitlements:
                     raw_groups.append(entitlements)
-                    
+
                 raw_groups.extend(user.get("realm_access", {}).get("roles", []))
 
                 sanitized_user_groups = []
-                for g in raw_groups:
-                    if g:
-                        g_str = str(g)
-                        if g_str.startswith("urn:geant:params:group:"):
-                            g_str = g_str.replace("urn:geant:params:group:", "")
-                        if g_str.startswith("/"):
-                            g_str = g_str[1:]
-                        sanitized_user_groups.append(g_str)
-                
-                # Check if all requested groups are in user's groups
-                for required_gid in auth_group_ids:
-                    if required_gid not in sanitized_user_groups:
-                        logger.warning(f"User {user_id} attempted to create project with unauthorized group {required_gid}")
-                        raise HTTPException(
-                            status_code=403, 
-                            detail=f"You are not a member of the authorization group: {required_gid}"
-                        )
-            
-            logger.info(f"Creating project with authorization groups: {auth_group_ids}")
+                for group_name in raw_groups:
+                    if group_name:
+                        group_str = str(group_name)
+                        if group_str.startswith("urn:geant:params:group:"):
+                            group_str = group_str.replace("urn:geant:params:group:", "")
+                        if group_str.startswith("/"):
+                            group_str = group_str[1:]
+                        sanitized_user_groups.append(group_str)
+
+                if auth_group_id not in sanitized_user_groups:
+                    logger.warning(
+                        f"User {user_id} attempted to create project with unauthorized group {auth_group_id}"
+                    )
+                    raise AuthorizationException(
+                        message=f"You are not a member of the authorization group: {auth_group_id}"
+                    )
+
+            logger.info(f"Creating project with authorization group: {auth_group_id}")
         else:
-             # [STRICT GROUP MODE]
-             raise HTTPException(
-                 status_code=400,
-                 detail="Authorization Group is required. Please select an existing group."
-             )
+            # [STRICT GROUP MODE]
+            raise ValidationException(
+                message="Authorization Group is required. Please select an existing group."
+            )
 
         db_project = Project(
-            name=project_in.name, 
-            description=project_in.description, 
+            name=project_in.name,
+            description=project_in.description,
             owner_id=user_id,
-            authorization_group_ids=auth_group_ids,
-            # For backward compatibility, set the first one as legacy ID if exists
-            authorization_provider_group_id=auth_group_ids[0] if auth_group_ids else None
+            authorization_provider_group_id=auth_group_id,
         )
         db.add(db_project)
         db.flush()  # Get ID
 
         # External Integrations
-        props = {}
-        
-        # 1. Keycloak Group Auto-Creation -> REMOVED
-        # We now require strict existing groups.
-        try:
-            from app.services.time_series_service import TimeSeriesService
+        properties = {}
 
-            ts_service = TimeSeriesService(db)
-            thing_id = ts_service.create_project_thing(
-                name=project_in.name,
-                description=project_in.description or "",
-                project_id=str(db_project.id),
-            )
-            if thing_id:
-                props["timeio_thing_id"] = thing_id
-        except Exception as e:
-            logger.error(f"Failed to create TimeIO entity for project: {e}")
-
-        if props:
-            db_project.properties = props
+        if properties:
+            db_project.properties = properties
 
         db.commit()
         db.refresh(db_project)
@@ -274,14 +273,14 @@ class ProjectService:
 
         # Sanitize: strip leading "/" and remove duplicates/None
         sanitized_groups = []
-        for g in user_groups:
-            if g:
-                g_str = str(g)
-                if g_str.startswith("urn:geant:params:group:"):
-                    g_str = g_str.replace("urn:geant:params:group:", "")
-                if g_str.startswith("/"):
-                    g_str = g_str[1:]
-                sanitized_groups.append(g_str)
+        for group_name in user_groups:
+            if group_name:
+                group_str = str(group_name)
+                if group_str.startswith("urn:geant:params:group:"):
+                    group_str = group_str.replace("urn:geant:params:group:", "")
+                if group_str.startswith("/"):
+                    group_str = group_str[1:]
+                sanitized_groups.append(group_str)
 
         user_groups = list(set(sanitized_groups))
         logger.info(f"User claims for filtering: {user_groups}")
@@ -291,36 +290,18 @@ class ProjectService:
             ProjectMember.user_id == user_id
         )
 
-        # Filters: Owner OR Member OR Groups Match
-        # For JSONB array overlap: Project.authorization_group_ids ?| array(user_groups)
-        from sqlalchemy import cast
-        from sqlalchemy.dialects.postgresql import ARRAY, JSONB
-
         # Construct SQLAlchemy filter
         criteria = [
             Project.owner_id == user_id,
             Project.id.in_(member_project_ids),
             Project.authorization_provider_group_id.in_(user_groups),
         ]
-        
+
         if user_groups:
-             # Check if ANY of the user groups exist in the JSONB list
-             # Using Postgres operator ?| (exists any)
-             # Must cast python list to Postgres ARRAY(TEXT)
-             from sqlalchemy import cast, Text
-             from sqlalchemy.dialects.postgresql import array
-             
-             # Note: array() literal might be cleaner than passing list + cast
-             criteria.append(
-                 Project.authorization_group_ids.op("?|")(cast(array(user_groups), ARRAY(Text)))
-             )
+            criteria.append(Project.authorization_provider_group_id.in_(user_groups))
 
         projects = (
-            db.query(Project)
-            .filter(or_(*criteria))
-            .offset(skip)
-            .limit(limit)
-            .all()
+            db.query(Project).filter(or_(*criteria)).offset(skip).limit(limit).all()
         )
 
         return projects
@@ -341,30 +322,20 @@ class ProjectService:
             project.name = project_in.name
         if project_in.description is not None:
             project.description = project_in.description
-            
+
         # Update groups
-        # Note: Should we validate membership again? 
+        # Note: Should we validate membership again?
         # Ideally yes, but maybe Editor role is trusted?
         # Let's simple validate if non-admin for safety.
-        if project_in.authorization_group_ids is not None:
-             auth_group_ids = project_in.authorization_group_ids
-             # Merge legacy field if provided
-             if project_in.authorization_provider_group_id:
-                 auth_group_ids.append(project_in.authorization_provider_group_id)
-                 
-             auth_group_ids = list(set(auth_group_ids))
-             
-             if auth_group_ids and not ProjectService._is_admin(user):
-                 # ... (Repeat group extraction logic or refactor to helper) ...
-                 # For brevity, assuming user ONLY adds groups they are part of.
-                 # Optimization: Creating a helper for user groups extraction is better, 
-                 # but for now we trust Editors OR assume UI limits it. 
-                 # Given complexity, we update it directly but risk is low for internal groups.
-                 pass
-             
-             project.authorization_group_ids = auth_group_ids
-             # Update legacy field for compat
-             project.authorization_provider_group_id = auth_group_ids[0] if auth_group_ids else None
+        if project_in.authorization_provider_group_id is not None:
+            auth_group_id = project_in.authorization_provider_group_id
+
+            if auth_group_id and not ProjectService._is_admin(user):
+                # Simple check
+                # (User must have access to new group?)
+                pass  # Editor trusted
+
+            project.authorization_provider_group_id = auth_group_id
 
         db.commit()
         db.refresh(project)
@@ -375,12 +346,12 @@ class ProjectService:
         # Only Owner or Admin can delete
         project = db.query(Project).filter(Project.id == project_id).first()
         if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise ResourceNotFoundException(message="Project not found")
 
         is_owner = str(project.owner_id) == str(user.get("sub"))
         if not (is_owner or ProjectService._is_admin(user)):
-            raise HTTPException(
-                status_code=403, detail="Only Owner or Admin can delete project"
+            raise AuthorizationException(
+                message="Only Owner or Admin can delete project"
             )
 
         db.delete(project)
@@ -405,33 +376,11 @@ class ProjectService:
             # Log the duplicate attempt
             logger.info(f"Sensor {sensor_id} already in project {project_id}")
             pass
-        except Exception as e:
+        except Exception as error:
             db.rollback()
-            logger.error(f"Error adding sensor to project: {e}")
+            logger.error(f"Error adding sensor to project: {error}")
             raise
         return {"project_id": project_id, "sensor_id": sensor_id}
-
-    @staticmethod
-    def create_and_link_sensor(
-        db: Session, project_id: UUID, sensor_data: SensorCreate, user: Dict[str, Any]
-    ):
-        # Access check handled in add_sensor, but good to check early
-        ProjectService._check_access(db, project_id, user, required_role="editor")
-
-        from app.services.time_series_service import TimeSeriesService
-
-        ts_service = TimeSeriesService(db)
-
-        # Create Thing in FROST
-        thing_id = ts_service.create_sensor_thing(sensor_data)
-
-        if not thing_id:
-            raise HTTPException(
-                status_code=500, detail="Failed to create sensor in TimeIO"
-            )
-
-        # Link
-        return ProjectService.add_sensor(db, project_id, thing_id, user)
 
     @staticmethod
     def remove_sensor(
@@ -450,42 +399,313 @@ class ProjectService:
         return {"status": "removed"}
 
     @staticmethod
-    def list_sensors(db: Session, project_id: UUID, user: Dict[str, Any]) -> List[str]:
-        ProjectService._check_access(db, project_id, user, required_role="viewer")
+    def list_sensors(
+        db: Session,
+        project_id: UUID,
+        user: Dict[str, Any],
+        rich: bool = False,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> List[Any]:
+        # Check Access
+        project = ProjectService._check_access(
+            db, project_id, user, required_role="viewer"
+        )
 
-        stmt = select(project_sensors.c.sensor_id).where(
+        # 1. Get linked UUIDs from local project_sensors table (water_dp-api database)
+        statement = select(project_sensors.c.sensor_id).where(
             project_sensors.c.project_id == project_id
         )
-        result = db.execute(stmt).scalars().all()
-        return [str(r) for r in result]
+        linked_uuids = [str(row) for row in db.execute(statement).scalars().all()]
+
+        if not linked_uuids:
+            return []
+
+        # 2. Use OrchestratorV3 for fetching sensors
+        from app.services.timeio.orchestrator_v3 import orchestrator_v3
+
+        try:
+            if rich:
+                # Use v3 Rich Orchestrator logic (all metadata + datastreams)
+                results = orchestrator_v3.list_sensors(
+                    project_name=project.name,
+                    project_group=project.authorization_provider_group_id,
+                )
+                return [t for t in results if str(t["uuid"]) in linked_uuids]
+            else:
+                # Use Paginated/Basic logic
+                results = orchestrator_v3.list_sensors_paginated(
+                    project_name=project.name,
+                    project_group=project.authorization_provider_group_id,
+                    uuids=linked_uuids,
+                    skip=skip,
+                    limit=limit,
+                )
+                return results
+
+        except Exception as error:
+            logger.error(f"Failed to fetch sensors for project {project.name}: {error}")
+            return []
+
+    @staticmethod
+    def _get_project_details_from_api(
+        project_uuid: str, token: str, project_name: str = None
+    ) -> Optional[tuple[int, str]]:
+        if not token:
+            logger.warning("_get_project_details_from_api called without token")
+            return None, None
+
+        url = f"{settings.thing_management_api_url}/project"
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            logger.info(
+                f"Querying thing-management for project {project_uuid} at {url}"
+            )
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                items = data.get("items", data) if isinstance(data, dict) else data
+                logger.debug(
+                    f"Received {len(items) if isinstance(items, list) else 0} projects from management API"
+                )
+
+                if isinstance(items, list):
+                    # 1. Try matching by UUID
+                    for project_data in items:
+                        project_uuid_api = (
+                            project_data.get("uuid")
+                            or project_data.get("thingId")
+                            or project_data.get("projectUuid")
+                        )
+                        if str(project_uuid_api) == str(project_uuid):
+                            logger.info(
+                                f"Found match by UUID: {project_data.get('name')} (ID: {project_data.get('id')})"
+                            )
+                            return project_data.get("id"), project_data.get("name")
+
+                    # 2. Try matching by Name
+                    if project_name:
+                        target_name = project_name.lower().strip()
+                        logger.info(f"Searching for project name: '{target_name}'")
+
+                        for project_data in items:
+                            current_name = (project_data.get("name") or "").lower()
+                            auth_group_id = (
+                                project_data.get("authorization_provider_group_id") or ""
+                            ).lower()
+
+                            # Matches: exact, suffix, reverse-suffix, auth-group
+                            if (
+                                current_name == target_name
+                                or current_name.endswith(f":{target_name}")
+                                or current_name.endswith(f"/{target_name}")
+                                or target_name.endswith(f":{current_name}")
+                                or target_name.endswith(f"/{current_name}")
+                                or (
+                                    auth_group_id
+                                    and (
+                                        auth_group_id == target_name
+                                        or target_name in auth_group_id
+                                    )
+                                )
+                            ):
+                                logger.info(
+                                    f"Found project by name match: id={project_data.get('id')}, name={project_data.get('name')}"
+                                )
+                                return project_data.get("id"), project_data.get("name")
+
+                    # 3. Last resort: if only one project exists, use it? USE WITH CAUTION.
+                    # This might be dangerous in multi-project envs, but helpful in dev.
+                    # if len(items) == 1:
+                    #    logger.warning("Single project found - assuming match.")
+                    #    return items[0].get("id"), items[0].get("name")
+
+            else:
+                logger.error(
+                    f"Failed to fetch projects: {response.status_code} {response.text}"
+                )
+        except Exception as error:
+            logger.error(f"Error fetching project details from thing-management: {error}")
+
+        logger.warning(
+            f"Project {project_uuid} (name: {project_name}) not found in thing-management response"
+        )
+        return None, None
+
+    @staticmethod
+    def _resolve_project_frost_url(
+        project_id: UUID,
+        token: str,
+        project_name: str = None,
+        project_auth_groups: List[str] = None,
+    ) -> Optional[str]:
+        """
+        Resolve FROST URL using Project Authorization Group.
+        Logic: Extract group name (last part after : or /), lowercase it, and append to base Host.
+        No external API call needed if we have the group list.
+        """
+        # Determine Base Host
+        base_host = "http://frost:8080"
+        if settings.frost_url:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(settings.frost_url)
+            base_host = f"{parsed.scheme}://{parsed.netloc}"
+
+        group_name = "default"
+
+        # Helper to parse group string
+        def parse_group(raw: str) -> str:
+            if not raw:
+                return ""
+            # Handle URN or Path
+            parts = raw.split(":")
+            if len(parts) > 1:
+                return parts[-1]
+            if "/" in raw:
+                return raw.split("/")[-1]
+            return raw
+
+        if project_auth_groups and len(project_auth_groups) > 0:
+            # [DEPRECATED CODE PATH] - Removing usage
+            # But method signature asked for project_auth_groups
+            # Let's support it if passed as single-item list
+            group_name = parse_group(project_auth_groups[0])
+
+            # If group_name looks like a UUID (length 36), resolve it
+            if len(group_name) == 36 and "-" in group_name:
+                try:
+                    from app.services.keycloak_service import KeycloakService
+
+                    keycloak_group = KeycloakService.get_group(group_name)
+                    if keycloak_group and keycloak_group.get("name"):
+                        logger.info(
+                            f"Resolved Keycloak Group UUID {group_name} -> {keycloak_group.get('name')}"
+                        )
+                        group_name = keycloak_group.get("name")
+                except Exception as error:
+                    logger.warning(
+                        f"Failed to resolve Keycloak group {group_name}: {error}"
+                    )
+
+        elif project_name:
+            # Fallback to project name if no group (unlikely for valid projects)
+            group_name = project_name
+
+        # Sanitize
+        # Strip UFZ-TSM: prefix if present (common in Keycloak groups)
+        clean_name = group_name.replace("UFZ-TSM:", "").replace("ufz-tsm:", "").strip()
+        slug = clean_name.lower().strip()
+
+        # Internal Docker URL does NOT use /sta/ prefix (that is for Proxy)
+        # Context is deployed at root: http://frost:8080/{schema}/v1.1
+        # Convention: usage of project_{slug}
+        if not slug.startswith("project_"):
+            slug = f"project_{slug}"
+
+        # Probe for suffix (e.g. _1, _2) since schema often includes ID
+        # Context is deployed at root: http://frost:8080/{schema}/v1.1
+
+        candidates = [slug]
+        # range 1 to 10 covers common ID schemas
+        for index in range(1, 10):
+            candidates.append(f"{slug}_{index}")
+
+        import requests
+
+        for c in candidates:
+            url = f"{base_host}/{c}/v1.1"
+            probe_url = f"{url}/Things"
+            try:
+                # Short timeout for probing
+                response = requests.get(probe_url, timeout=1, params={"$top": 1})
+                if response.status_code == 200:
+                    logger.info(f"Resolved FROST URL via probe: {url}")
+                    return url
+            except Exception:
+                pass
+
+        # Fallback to base slug if probe fails
+        url = f"{base_host}/{slug}/v1.1"
+        logger.warning(
+            f"Could not probe valid FROST URL for {group_name}, falling back to {url}"
+        )
+        return url
 
     @staticmethod
     def get_available_sensors(
-        db: Session, project_id: UUID, user: Dict[str, Any]
+        db: Session,
+        project_id: UUID,
+        user: Dict[str, Any],
+        token: str = None,
+        skip: int = 0,
+        limit: int = 100,
     ) -> List[Dict]:
-        """List sensors available in FROST that are NOT linked to this project."""
-        ProjectService._check_access(db, project_id, user, required_role="viewer")
+        """List sensors available in the project's FROST instance that are NOT linked in water_dp-api."""
+        # 1. Check access
+        project = ProjectService._check_access(
+            db, project_id, user, required_role="viewer"
+        )
 
-        # 1. Get linked sensor IDs
-        linked_ids = ProjectService.list_sensors(db, project_id, user)
+        # 2. Get currently linked sensor IDs (UUIDs) from local water_dp-api database
+        statement = select(project_sensors.c.sensor_id).where(
+            project_sensors.c.project_id == project_id
+        )
+        linked_uuids = {str(row) for row in db.execute(statement).scalars().all()}
 
-        # 2. Get all sensors from TS service
-        from app.services.time_series_service import TimeSeriesService
+        # 3. Fetch all things from Orchestrator (Basic) which uses correct Schema
+        from app.services.timeio.orchestrator_v3 import orchestrator_v3
 
-        ts_service = TimeSeriesService(db)
+        try:
+            # We want ALL sensors in the schema to filter them
+            # Since we don't have a "NOT IN" filter in Orchestrator yet easily exposable,
+            # We fetch basic list and filter in memory (assuming < 1000 sensors usually per project)
+            all_sensors = orchestrator_v3.list_all_sensors_basic(
+                project_name=project.name,
+                project_group=project.authorization_provider_group_id,
+            )
+        except Exception as error:
+            logger.error(
+                f"Failed to fetch available sensors for project {project.name}: {error}"
+            )
+            return []
 
-        all_stations = ts_service.get_stations(limit=1000)  # Get a large batch
+        available = []
+        for sensor in all_sensors:
+            # sensor is {uuid, name, description} from list_all_sensors_basic
+            thing_uuid = str(sensor.get("uuid"))
 
-        # 3. Filter
-        # Note: ts_service maps thing/@iot.id to 'id' (string).
-        # Project link stores the original @iot.id (as a string) in sensor_id.
-        available = [
-            s
-            for s in all_stations
-            if str(s.get("id")) not in [str(lid) for lid in linked_ids]
-        ]
+            if thing_uuid not in linked_uuids:
+                # We need the FROST ID (View ID) if we want to construct links, but list_all_sensors_basic
+                # might only return UUID/Name from 'thing' table unless we joined.
+                # Actually list_all_sensors_basic returns result of get_all_sensors_basic which
+                # returns: id, name, description, properties, uuid.
+                # Check timeio_db.py get_all_sensors_basic implementation to be sure.
 
-        return available
+                # Assuming sensor has 'id' (int/str) and 'uuid'
+                thing_id = sensor.get("id")
+
+                # Construct public link path (relative)
+                # We need schema name... Orchestrator resolved it but didn't return it in list.
+                # Keep it simple for now or resolve schema again.
+                # public_link = f"/sta/{schema}/v1.1/Things('{thing_id}')"
+
+                available.append(
+                    {
+                        "id": thing_id,
+                        "name": sensor["name"],
+                        "description": sensor.get("description", ""),
+                        "properties": sensor.get("properties", {}),
+                        "latitude": sensor.get("latitude"),  # Might be missing in basic
+                        "longitude": sensor.get("longitude"),
+                        # "iot_self_link": public_link
+                    }
+                )
+
+        # Pagination on the memory list
+        start = skip
+        end = skip + limit
+        return available[start:end]
 
     @staticmethod
     def get_allowed_sensor_ids(db: Session, user: Dict[str, Any]) -> List[str]:
@@ -498,17 +718,17 @@ class ProjectService:
         projects = ProjectService.list_projects(db, user, limit=1000)
         if not projects:
             return []
-            
+
         project_ids = [p.id for p in projects]
-        
+
         # 2. Get Sensors linked to these projects
-        stmt = select(project_sensors.c.sensor_id).where(
+        statement = select(project_sensors.c.sensor_id).where(
             project_sensors.c.project_id.in_(project_ids)
         )
-        result = db.execute(stmt).scalars().all()
-        
+        result = db.execute(statement).scalars().all()
+
         # Ensure unique list
-        return list(set([str(r) for r in result]))
+        return list(set([str(row) for row in result]))
 
     # --- Member Management ---
 
@@ -519,10 +739,8 @@ class ProjectService:
         member_in: ProjectMemberCreate,
         user: Dict[str, Any],
     ) -> ProjectMember:
-        # [DEPRECATED]
-        raise HTTPException(
-            status_code=400, 
-            detail="Direct member management is disabled. Please manage membership via Authorization Groups."
+        raise ValidationException(
+            message="Direct member management is disabled. Please manage membership via Authorization Groups."
         )
 
     @staticmethod
@@ -534,13 +752,13 @@ class ProjectService:
         # User requested: "Project Member management disabled".
         # But we still want to SEE who has access?
         # "list_members" usually implies the specific ProjectMember table.
-        # Let's keep this as-is (read-only) for existing members, 
+        # Let's keep this as-is (read-only) for existing members,
         # BUT we should probably also return Group Members if we want to be helpful.
         # Ideally, the Frontend should call /groups/{id}/members instead.
-        
+
         # For strict compliance with "Disable member management", we leave this read-only.
         # It allows seeing "old" members.
-        
+
         ProjectService._check_access(db, project_id, user, required_role="viewer")
         members = (
             db.query(ProjectMember).filter(ProjectMember.project_id == project_id).all()
@@ -550,28 +768,28 @@ class ProjectService:
         from app.services.keycloak_service import KeycloakService
 
         results = []
-        for m in members:
+        for member in members:
             # Convert SQLAlchemy model to Pydantic dict foundation
-            m_dict = {
-                "id": m.id,
-                "project_id": m.project_id,
-                "user_id": m.user_id,
-                "role": m.role,
-                "created_at": m.created_at,
-                "updated_at": m.updated_at,
+            member_dict = {
+                "id": member.id,
+                "project_id": member.project_id,
+                "user_id": member.user_id,
+                "role": member.role,
+                "created_at": member.created_at,
+                "updated_at": member.updated_at,
                 "username": "Unknown",
             }
             # Try resolve username
             try:
-                k_user = KeycloakService.get_user_by_id(str(m.user_id))
-                if k_user:
-                    m_dict["username"] = k_user.get("username")
-            except Exception as exc:
+                keycloak_user = KeycloakService.get_user_by_id(str(member.user_id))
+                if keycloak_user:
+                    member_dict["username"] = keycloak_user.get("username")
+            except Exception as error:
                 # Best-effort: on any failure, keep the default "Unknown" username but log the error.
                 logger.warning(
-                    "Failed to resolve username for user_id %s: %s", m.user_id, exc
+                    "Failed to resolve username for user_id %s: %s", member.user_id, error
                 )
-            results.append(ProjectMemberResponse(**m_dict))
+            results.append(ProjectMemberResponse(**member_dict))
 
         return results
 
@@ -579,42 +797,14 @@ class ProjectService:
     def update_member(
         db: Session, project_id: UUID, user_id: str, role: str, user: Dict[str, Any]
     ) -> ProjectMember:
-        # [DEPRECATED]
-        raise HTTPException(
-            status_code=400, 
-            detail="Direct member management is disabled. Please manage membership via Authorization Groups."
+        raise ValidationException(
+            message="Direct member management is disabled. Please manage membership via Authorization Groups."
         )
 
     @staticmethod
     def remove_member(
         db: Session, project_id: UUID, user_id: str, user: Dict[str, Any]
     ):
-        # [DEPRECATED]
-        raise HTTPException(
-            status_code=400, 
-            detail="Direct member management is disabled. Please manage membership via Authorization Groups."
+        raise ValidationException(
+            message="Direct member management is disabled. Please manage membership via Authorization Groups."
         )
-
-        stmt = ProjectMember.__table__.delete().where(
-            and_(
-                ProjectMember.project_id == project_id, ProjectMember.user_id == user_id
-            )
-        )
-        db.execute(stmt)
-        db.commit()
-
-        # [SYNC] Remove user from Keycloak Groups
-        if project.authorization_group_ids:
-            from app.services.keycloak_service import KeycloakService
-            for group_name in project.authorization_group_ids:
-                try:
-                    group = KeycloakService.get_group_by_name(group_name)
-                    if group and group.get("id"):
-                        KeycloakService.remove_user_from_group(user_id, group["id"])
-                        logger.info(f"Synced removal of user {user_id} from Keycloak group {group_name}")
-                    else:
-                        logger.warning(f"Could not find Keycloak group '{group_name}' for sync.")
-                except Exception as e:
-                    logger.error(f"Failed to sync removal from Keycloak group {group_name}: {e}")
-
-        return {"status": "removed"}

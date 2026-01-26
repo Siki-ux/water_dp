@@ -1,145 +1,121 @@
-"""
-Logging configuration for the Water Data Platform.
-"""
-
 import logging
 import logging.config
 import sys
-from typing import Any, Dict
-
-import structlog
 
 from app.core.config import settings
 
 
-def configure_logging() -> None:
-    """Configure application logging."""
+class RequestIdFilter(logging.Filter):
+    """
+    Filter to inject request_id into log records.
+    Relies on contextvar set by middleware.
+    """
 
-    # Base logging configuration
-    logging_config: Dict[str, Any] = {
+    def filter(self, record):
+        from app.core.middleware import request_id_context
+
+        record.request_id = request_id_context.get() or "system"
+        return True
+
+
+class MockExternalHandler(logging.Handler):
+    """
+    Mock handler for external logging services (e.g., Azure Monitor, AWS CloudWatch).
+    """
+
+    def emit(self, record):
+        # In a real implementation, this would push logs to an external service.
+        # For now, we just formatted it but don't output to avoid duplicate console noise,
+        # or we could print a specific prefix to show it's working.
+        try:
+            self.format(record)
+            # print(f"[EXTERNAL HOOK] {msg}") # Uncomment to verify hook
+        except Exception:
+            self.handleError(record)
+
+
+def setup_logging():
+    """
+    Configure logging using logging.dictConfig.
+    """
+    handlers = ["console"]
+    if settings.enable_external_logging:
+        handlers.append("external_mock")
+
+    logging_config = {
         "version": 1,
         "disable_existing_loggers": False,
+        "filters": {"request_id": {"()": RequestIdFilter}},
         "formatters": {
-            "default": {
-                "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-                "datefmt": "%Y-%m-%d %H:%M:%S",
-            },
-            "detailed": {
-                "format": "%(asctime)s - %(name)s - %(levelname)s - %(module)s - %(funcName)s - %(lineno)d - %(message)s",
+            "console": {
+                "format": "%(asctime)s - %(levelname)s - [%(request_id)s] - %(name)s - %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S",
             },
             "json": {
-                "()": "structlog.stdlib.ProcessorFormatter",
-                "processor": structlog.dev.ConsoleRenderer(colors=True),
+                "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
+                "format": "%(asctime)s %(levelname)s %(request_id)s %(name)s %(message)s",
             },
         },
         "handlers": {
             "console": {
                 "class": "logging.StreamHandler",
-                "level": settings.log_level.upper(),
-                "formatter": "default",
                 "stream": sys.stdout,
+                "formatter": "console" if settings.log_format == "console" else "json",
+                "filters": ["request_id"],
+                "level": settings.log_level.upper(),
             },
-            "file": {
-                "class": "logging.handlers.RotatingFileHandler",
+            "external_mock": {
+                "class": "app.core.logging_config.MockExternalHandler",
+                "formatter": "json",
+                "filters": ["request_id"],
                 "level": "INFO",
-                "formatter": "detailed",
-                "filename": "logs/water_dp.log",
-                "maxBytes": 10485760,  # 10MB
-                "backupCount": 5,
-            },
-            "error_file": {
-                "class": "logging.handlers.RotatingFileHandler",
-                "level": "ERROR",
-                "formatter": "detailed",
-                "filename": "logs/water_dp_errors.log",
-                "maxBytes": 10485760,  # 10MB
-                "backupCount": 5,
             },
         },
         "loggers": {
-            "app": {
+            "root": {
+                "handlers": handlers,
                 "level": settings.log_level.upper(),
-                "handlers": ["console", "file"],
                 "propagate": False,
             },
-            "sqlalchemy": {
-                "level": "WARNING",
-                "handlers": ["console", "file"],
+            "app": {
+                "handlers": handlers,
+                "level": settings.log_level.upper(),
                 "propagate": False,
             },
-            "alembic": {
-                "level": "INFO",
-                "handlers": ["console"],
-                "propagate": False,
-            },
-            "uvicorn": {
-                "level": "INFO",
-                "handlers": ["console"],
-                "propagate": False,
-            },
+            "uvicorn": {"handlers": handlers, "level": "INFO", "propagate": False},
             "uvicorn.access": {
+                "handlers": handlers,
                 "level": "INFO",
-                "handlers": ["console"],
                 "propagate": False,
             },
-        },
-        "root": {
-            "level": settings.log_level.upper(),
-            "handlers": ["console", "file", "error_file"],
+            "sqlalchemy.engine": {
+                "handlers": handlers,
+                "level": settings.sqlalchemy_log_level.upper(),
+                "propagate": False,
+            },
+            "fastapi": {
+                "handlers": handlers,
+                "level": settings.log_level.upper(),
+                "propagate": False,
+            },
         },
     }
 
-    # Apply configuration
-    logging.config.dictConfig(logging_config)
+    try:
+        # If using json formatter, ensure library is installed or fallback
+        if settings.log_format == "json":
+            try:
+                import pythonjsonlogger  # noqa: F401
+            except ImportError:
+                print(
+                    "WARNING: python-json-logger not found. Falling back to console format."
+                )
+                logging_config["handlers"]["console"]["formatter"] = "console"
+                if "json" in logging_config["formatters"]:
+                    del logging_config["formatters"]["json"]
 
-    # Configure structlog
-    structlog.configure(
-        processors=[
-            structlog.stdlib.filter_by_level,
-            structlog.stdlib.add_logger_name,
-            structlog.stdlib.add_log_level,
-            structlog.stdlib.PositionalArgumentsFormatter(),
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.StackInfoRenderer(),
-            structlog.processors.format_exc_info,
-            structlog.processors.UnicodeDecoder(),
-            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
-        ],
-        context_class=dict,
-        logger_factory=structlog.stdlib.LoggerFactory(),
-        wrapper_class=structlog.stdlib.BoundLogger,
-        cache_logger_on_first_use=True,
-    )
-
-
-def get_logger(name: str) -> structlog.BoundLogger:
-    """Get a structured logger instance."""
-    return structlog.get_logger(name)
-
-
-# Request logging middleware
-class RequestLoggingMiddleware:
-    """Middleware for logging HTTP requests."""
-
-    def __init__(self, app):
-        self.app = app
-        self.logger = get_logger("request")
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] == "http":
-            # Log request
-            self.logger.info(
-                "Request started",
-                method=scope["method"],
-                path=scope["path"],
-                query_string=scope.get("query_string", b"").decode(),
-            )
-
-            # Process request
-            await self.app(scope, receive, send)
-
-            # Log response (this is simplified - in practice you'd want to capture status)
-            self.logger.info("Request completed")
-        else:
-            await self.app(scope, receive, send)
+        logging.config.dictConfig(logging_config)
+    except Exception as e:
+        print(f"Failed to setup logging: {e}")
+        # Fallback basic config
+        logging.basicConfig(level=logging.INFO)

@@ -66,9 +66,9 @@ async def test_has_role_allowed():
     # The dependency itself is async if it depends on async get_current_user,
     # but here we are testing the return value of has_role (the callable `role_checker`).
     # `role_checker` depends on `current_user`. In integration it's resolved.
-    # In unit test, we call `role_checker(current_user=mock_user)`.
+    # In unit test, we call `role_checker(user=mock_user)`.
     # `role_checker` is defined as `async def role_checker`.
-    result = await checker(current_user=mock_user)
+    result = await checker(user=mock_user)
     assert result == mock_user
 
 
@@ -79,5 +79,5 @@ async def test_has_role_forbidden():
 
     checker = has_role("admin")
     with pytest.raises(HTTPException) as exc:
-        await checker(current_user=mock_user)
+        await checker(user=mock_user)
     assert exc.value.status_code == 403

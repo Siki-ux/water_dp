@@ -28,7 +28,7 @@ RUN pip install --no-cache-dir poetry==1.8.2 \
     && poetry config virtualenvs.create false
 
 COPY pyproject.toml poetry.lock* ./
-RUN poetry install --no-interaction --no-ansi --no-root --only main
+RUN poetry lock --no-update && poetry install --no-interaction --no-ansi --no-root --only main
 
 # Copy project
 COPY . .
@@ -40,5 +40,6 @@ USER appuser
 # Expose port
 EXPOSE 8000
 
-# Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the application via start script
+RUN chmod +x /app/scripts/start.sh
+CMD ["/app/scripts/start.sh"]

@@ -9,7 +9,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict
 from sqlalchemy import Column, DateTime, Integer, String, Text
 from sqlalchemy.ext.declarative import declared_attr
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, declarative_base
 
 
 class BaseModel:
@@ -59,3 +59,6 @@ class PydanticBase(PydanticBaseModel):
     """Base Pydantic model with common configuration."""
 
     model_config = ConfigDict(from_attributes=True)
+
+
+Base = declarative_base(cls=BaseModel)

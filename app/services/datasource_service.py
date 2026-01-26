@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import AppException
 from app.models.datasource import DataSource
 from app.schemas.datasource import DataSourceCreate, DataSourceUpdate
 from app.services.encryption_service import encryption_service
@@ -165,6 +166,8 @@ class DataSourceService:
             except Exception as e:
                 logger.error(f"Query execution failed: {e}")
                 # Return error structure
-                raise Exception(f"Query failed: {str(e)}")
+                if isinstance(e, AppException):
+                    raise e
+                raise AppException(message=f"Query failed: {str(e)}")
 
-        raise Exception(f"Unsupported datasource type: {datasource.type}")
+        raise AppException(message=f"Unsupported datasource type: {datasource.type}")

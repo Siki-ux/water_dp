@@ -37,7 +37,7 @@ services:
   api:
     build: .
     container_name: water-dp-api
-    restart: unless-stopped
+    # restart: unless-stopped
     env_file: .env
     environment:
       - APP_NAME=Water Data Platform
@@ -59,12 +59,21 @@ services:
       - SECRET_KEY=${SECRET_KEY}
       - ACCESS_TOKEN_EXPIRE_MINUTES=30
       - LOG_LEVEL=INFO
-      - KEYCLOAK_URL=${KEYCLOAK_URL:-http://timeio-keycloak:8080}
+      - KEYCLOAK_URL=${KEYCLOAK_URL:-http://keycloak:8081/keycloak}
       - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL:-http://${PUBLIC_HOSTNAME:-localhost}:8081}
-      - KEYCLOAK_ADMIN_USERNAME=${KEYCLOAK_ADMIN:-admin}
-      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
-      - FROST_URL=${FROST_URL:-http://timeio-frost:8080/FROST-Server/v1.1}
+      - KEYCLOAK_ADMIN_USERNAME=${KEYCLOAK_ADMIN_USERNAME:-keycloak}
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-keycloak}
+      - FROST_URL=http://frost:8080/FROST-Server/v1.1
+      - TIMEIO_DB_HOST=database
+      - TIMEIO_DB_PORT=5432
+      - MQTT_BROKER_HOST=mqtt-broker
+      - THING_MANAGEMENT_API_URL=http://thing-management-api:8002
+      - FERNET_ENCRYPTION_SECRET=${FERNET_ENCRYPTION_SECRET:-CKoB---DEFAULT-DUMMY-SECRET---0exKVH0QDLy1B=}
+      - MQTT_USERNAME=${MQTT_USERNAME:-frontendbus}
+      - MQTT_PASSWORD=${MQTT_PASSWORD:-frontendbus}
+      - SQLALCHEMY_LOG_LEVEL=WARNING
     ports:
+
       - "8000:8000"
     healthcheck:
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
@@ -81,13 +90,14 @@ services:
       - ./app:/app/app
     networks:
       - water_shared_net
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+      - tsm_network
+    command: sh scripts/start.sh
 
   worker:
     build: .
     container_name: water-dp-worker
-    restart: unless-stopped
-    command: celery -A app.core.celery_app.celery_app worker --loglevel=info -Q imports,computations,celery
+    # restart: unless-stopped
+    command: celery -A app.core.celery_app.celery_app worker -B --loglevel=info -Q imports,computations,celery
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://${DATABASE_USER:-postgres}:${DATABASE_PASSWORD:-postgres}@postgres-app:5432/water_app
@@ -97,8 +107,17 @@ services:
       - FROST_URL=${FROST_URL:-http://timeio-frost:8080/FROST-Server/v1.1}
       - SECRET_KEY=${SECRET_KEY}
       - GEOSERVER_URL=http://water-dp-geoserver:8080/geoserver
+      - TIMEIO_DB_HOST=database
+      - TIMEIO_DB_PORT=5432
+      - MQTT_BROKER_HOST=mqtt-broker
+      - THING_MANAGEMENT_API_URL=http://thing-management-api:8002
+      - FERNET_ENCRYPTION_SECRET=${FERNET_ENCRYPTION_SECRET:-CKoB---DEFAULT-DUMMY-SECRET---0exKVH0QDLy1B=}
+      - MQTT_USERNAME=${MQTT_USERNAME:-frontendbus}
+      - MQTT_PASSWORD=${MQTT_PASSWORD:-frontendbus}
       - GEOSERVER_USERNAME=${GEOSERVER_ADMIN_USER:-admin}
+
       - GEOSERVER_PASSWORD=${GEOSERVER_ADMIN_PASSWORD:-geoserver}
+      - SQLALCHEMY_LOG_LEVEL=WARNING
     depends_on:
       postgres-app:
         condition: service_healthy
@@ -110,32 +129,36 @@ services:
       - ./app:/app/app
     networks:
       - water_shared_net
-
+      - tsm_network
   # --- Seeding ---
-  waterdp-init:
-    build: .
-    container_name: water-dp-init
-    restart: "no"
-    command: python scripts/seed_water_dp.py
-    env_file: .env
-    environment:
-      - DATABASE_URL=postgresql://${DATABASE_USER:-postgres}:${DATABASE_PASSWORD:-postgres}@postgres-app:5432/water_app
-      - FROST_URL=${FROST_URL:-http://timeio-frost:8080/FROST-Server/v1.1}
-      - GEOSERVER_URL=${GEOSERVER_URL:-http://water-dp-geoserver:8080/geoserver}
-      - GEOSERVER_USERNAME=${GEOSERVER_ADMIN_USER:-admin}
-      - GEOSERVER_PASSWORD=${GEOSERVER_ADMIN_PASSWORD:-geoserver}
-      - SEEDING=true
-    depends_on:
-      postgres-app:
-        condition: service_healthy
-      api:
-        condition: service_healthy
-    volumes:
-      - ./app:/app/app
-      - ./scripts:/app/scripts
-      - ./data:/app/data
-    networks:
-      - water_shared_net
+  # waterdp-init:
+  #   build: .
+  #   container_name: water-dp-init
+  #   restart: "no"
+  #   command: python scripts/seed_water_dp.py
+  #   env_file: .env
+  #   environment:
+  #     - DATABASE_URL=postgresql://${DATABASE_USER:-postgres}:${DATABASE_PASSWORD:-postgres}@postgres-app:5432/water_app
+  #     - FROST_URL=${FROST_URL:-http://localhost/sta/v1.1}
+  #     - GEOSERVER_URL=${GEOSERVER_URL:-http://water-dp-geoserver:8080/geoserver}
+  #     - GEOSERVER_USERNAME=${GEOSERVER_ADMIN_USER:-admin}
+  #     - GEOSERVER_PASSWORD=${GEOSERVER_ADMIN_PASSWORD:-geoserver}
+  #     - KEYCLOAK_URL=${KEYCLOAK_URL:-http://keycloak:8081/keycloak}
+  #     - KEYCLOAK_ADMIN_USERNAME=${KEYCLOAK_ADMIN_USERNAME:-keycloak}
+  #     - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-keycloak}
+  #     - SEEDING=true
+  #   depends_on:
+  #     postgres-app:
+  #       condition: service_healthy
+  #     api:
+  #       condition: service_healthy
+  #   volumes:
+  #     - ./app:/app/app
+  #     - ./scripts:/app/scripts
+  #     - ./data:/app/data
+  #   networks:
+  #     - water_shared_net
+  #     - tsm_network
 
 volumes:
   postgres_app_data:
@@ -147,3 +170,7 @@ networks:
   water_shared_net:
     name: water_shared_net
     driver: bridge
+
+  tsm_network:
+    external: true
+    name: tsm-orchestration_default

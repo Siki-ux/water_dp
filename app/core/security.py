@@ -34,8 +34,8 @@ async def get_jwks() -> Dict[str, Any]:
             _jwks_cache = response.json()
             logger.info("Fetched JWKS from Keycloak")
             return _jwks_cache
-    except Exception as e:
-        logger.error(f"Failed to fetch JWKS: {e}")
+    except Exception as error:
+        logger.error(f"Failed to fetch JWKS: {error}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication service unavailable",
@@ -98,13 +98,13 @@ async def verify_token(token: str) -> Dict[str, Any]:
             },
         )
 
-        iss = payload.get("iss")
-        if iss not in valid_issuers:
-            logger.warning(f"Invalid issuer: {iss}. Expected one of {valid_issuers}")
+        issuer = payload.get("iss")
+        if issuer not in valid_issuers:
+            logger.warning(f"Invalid issuer: {issuer}. Expected one of {valid_issuers}")
             logger.debug(f"Unverified payload: {payload}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Invalid token issuer: {iss}",
+                detail=f"Invalid token issuer: {issuer}",
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
@@ -113,15 +113,15 @@ async def verify_token(token: str) -> Dict[str, Any]:
         )
         return payload
 
-    except JWTError as e:
-        logger.warning(f"JWT Verification failed: {e}")
+    except JWTError as error:
+        logger.warning(f"JWT Verification failed: {error}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    except Exception as e:
-        logger.error(f"Authentication error: {e}")
+    except Exception as error:
+        logger.error(f"Authentication error: {error}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication failed",

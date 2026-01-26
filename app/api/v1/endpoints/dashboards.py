@@ -32,44 +32,44 @@ async def get_optional_current_user(request: Request) -> dict | None:
         return await verify_token(token)
     except (JWTError, ValidationError):
         return None
-    except Exception as e:
-        logger.error(f"Token verification unexpected error: {e}")
+    except Exception as error:
+        logger.error(f"Token verification unexpected error: {error}")
         return None
 
 
 @router.get("/{dashboard_id}", response_model=DashboardResponse)
 async def get_dashboard(
     dashboard_id: UUID,
-    db: Session = Depends(get_db),
-    current_user: dict | None = Depends(get_optional_current_user),
+    database: Session = Depends(get_db),
+    user: dict | None = Depends(get_optional_current_user),
 ) -> Any:
     """
     Get dashboard details.
     Public dashboards are accessible without auth.
     Private dashboards require auth.
     """
-    return DashboardService.get_dashboard(db, dashboard_id, current_user)
+    return DashboardService.get_dashboard(database, dashboard_id, user)
 
 
 @router.put("/{dashboard_id}", response_model=DashboardResponse)
 def update_dashboard(
     dashboard_id: UUID,
     dashboard_in: DashboardUpdate,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(deps.get_current_user),
+    database: Session = Depends(get_db),
+    user: dict = Depends(deps.get_current_user),
 ) -> Any:
     """Update dashboard."""
     return DashboardService.update_dashboard(
-        db, dashboard_id, dashboard_in, current_user
+        database, dashboard_id, dashboard_in, user
     )
 
 
 @router.delete("/{dashboard_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_dashboard(
     dashboard_id: UUID,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(deps.get_current_user),
+    database: Session = Depends(get_db),
+    user: dict = Depends(deps.get_current_user),
 ) -> None:
     """Delete dashboard."""
-    DashboardService.delete_dashboard(db, dashboard_id, current_user)
+    DashboardService.delete_dashboard(database, dashboard_id, user)
     return

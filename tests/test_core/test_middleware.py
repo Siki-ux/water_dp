@@ -59,8 +59,10 @@ def test_resource_not_found(client):
     response = client.get("/not-found")
     assert response.status_code == 404
     data = response.json()
-    assert data["detail"] == "Item not found"
+    assert data["error"]["message"] == "Item not found"
+    assert data["error"]["code"] == "ResourceNotFoundException"
     assert "X-Error-Details" in response.headers
+
     assert "'id': '123'" in response.headers["X-Error-Details"]
 
 
@@ -68,33 +70,33 @@ def test_validation_error(client):
     response = client.get("/validation-error")
     assert response.status_code == 422
     data = response.json()
-    assert data["detail"] == "Invalid input"
+    assert data["error"]["message"] == "Invalid input"
 
 
 def test_service_error_timeseries(client):
     response = client.get("/service-error")
     assert response.status_code == 500
     data = response.json()
-    assert data["detail"] == "Time series processing failed"
+    assert data["error"]["message"] == "Time series processing failed"
 
 
 def test_service_error_database(client):
     response = client.get("/database-error")
     assert response.status_code == 500
     data = response.json()
-    assert data["detail"] == "Database operation failed"
+    assert data["error"]["message"] == "Database operation failed"
 
 
 def test_service_error_geoserver(client):
     response = client.get("/geoserver-error")
     assert response.status_code == 503
     data = response.json()
-    assert data["detail"] == "GeoServer operation failed"
+    assert data["error"]["message"] == "GeoServer operation failed"
 
 
 def test_unknown_error(client):
     response = client.get("/unknown-error")
     assert response.status_code == 500
     data = response.json()
-    assert data["detail"] == "Internal server error"
-    assert data["type"] == "internal_error"
+    assert data["error"]["message"] == "An unexpected error occurred."
+    assert data["error"]["code"] == "InternalServerException"

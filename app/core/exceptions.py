@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 from fastapi import HTTPException, status
 
 
-class WaterDataPlatformException(Exception):
+class AppException(Exception):
     """Base exception for Water Data Platform."""
 
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
@@ -16,68 +16,68 @@ class WaterDataPlatformException(Exception):
         super().__init__(self.message)
 
 
-class DatabaseException(WaterDataPlatformException):
+class DatabaseException(AppException):
     """Database operation exception."""
 
     pass
 
 
-class GeoServerException(WaterDataPlatformException):
+class GeoServerException(AppException):
     """GeoServer operation exception."""
 
     pass
 
 
-class TimeSeriesException(WaterDataPlatformException):
+class TimeSeriesException(AppException):
     """Time series processing exception."""
 
     pass
 
 
-class ValidationException(WaterDataPlatformException):
+class ValidationException(AppException):
     """Data validation exception."""
 
     pass
 
 
-class ConfigurationException(WaterDataPlatformException):
+class ConfigurationException(AppException):
     """Configuration exception."""
 
     pass
 
 
-class AuthenticationException(WaterDataPlatformException):
+class AuthenticationException(AppException):
     """Authentication exception."""
 
     pass
 
 
-class AuthorizationException(WaterDataPlatformException):
+class AuthorizationException(AppException):
     """Authorization exception."""
 
     pass
 
 
-class ResourceNotFoundException(WaterDataPlatformException):
+class ResourceNotFoundException(AppException):
     """Resource not found exception."""
 
     pass
 
 
-class ConflictException(WaterDataPlatformException):
+class ConflictException(AppException):
     """Resource conflict exception."""
 
     pass
 
 
-class RateLimitException(WaterDataPlatformException):
+class RateLimitException(AppException):
     """Rate limit exceeded exception."""
 
     pass
 
 
 # HTTP Exception mappings
-def create_http_exception(exc: WaterDataPlatformException) -> HTTPException:
+def create_http_exception(exc: AppException) -> HTTPException:
     """Convert custom exceptions to HTTP exceptions."""
 
     if isinstance(exc, ResourceNotFoundException):
@@ -153,7 +153,7 @@ def create_http_exception(exc: WaterDataPlatformException) -> HTTPException:
 
 # Exception handlers
 def handle_water_data_platform_exception(
-    exc: WaterDataPlatformException,
+    exc: AppException,
 ) -> HTTPException:
     """Handle Water Data Platform exceptions."""
     return create_http_exception(exc)
