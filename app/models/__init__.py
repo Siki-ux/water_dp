@@ -7,6 +7,7 @@ from .base import BaseModel
 from .computations import ComputationJob, ComputationScript
 from .datasource import DataSource
 from .geospatial import GeoFeature, GeoLayer
+from .simulation import Simulation
 from .user_context import Dashboard, Project, ProjectMember, project_sensors
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "DataSource",
     "AlertDefinition",
     "Alert",
+    "Simulation",
 ]

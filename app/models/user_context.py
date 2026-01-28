@@ -50,6 +50,9 @@ class Project(Base, BaseModel):
     authorization_provider_group_id = Column(String(255), nullable=True, index=True)
     # authorization_group_ids = Column(JSONB, nullable=True, default=list) # Removed
 
+    # TimeIO Project ID
+    schema_name = Column(String(255), nullable=True, index=True)
+
     # Relationships
     dashboards = relationship(
         "Dashboard", back_populates="project", cascade="all, delete-orphan"

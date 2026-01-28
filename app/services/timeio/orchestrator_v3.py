@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.services.keycloak_service import KeycloakService
 from app.services.timeio.mqtt_client import MQTTClient
 from app.services.timeio.timeio_db import TimeIODatabase
+from app.services.timeio.frost_client import get_cached_frost_client
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,7 @@ class TimeIOOrchestratorV3:
         device_type: str = "chirpstack_generic",
         location: Optional[Dict[str, float]] = None,
         properties: Optional[List[Dict[str, str]]] = None,
+        parser_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Create a new sensor (Thing) autonomously.
@@ -250,6 +252,31 @@ class TimeIOOrchestratorV3:
                 )
             except Exception as error:
                 logger.error(f"Failed to register metadata: {error}")
+                
+        # 6 (New). Link Parser if requested
+        if parser_id:
+            try:
+                # Link Parser to Thing's S3 Store in ConfigDB
+                success = self.db.link_thing_to_parser(thing_uuid, parser_id)
+                if success:
+                    logger.info(f"Linked thing {thing_uuid} to parser {parser_id}")
+                else:
+                    logger.warning(f"Failed to link parser {parser_id} to thing {thing_uuid}")
+            except Exception as error:
+                logger.error(f"Failed to link parser: {error}")
+
+        # 7. Register Location (in properties)
+        if location:
+            try:
+                self.update_sensor_location(
+                    thing_uuid=thing_uuid,
+                    project_schema=target_schema,
+                    latitude=location["latitude"],
+                    longitude=location["longitude"]
+                )
+                logger.info(f"Registered location for thing {thing_uuid} in properties")
+            except Exception as error:
+                logger.error(f"Failed to register location: {error}")
 
         return {
             "id": frost_id,  # FROST View ID (might be None if timeout)
@@ -263,16 +290,25 @@ class TimeIOOrchestratorV3:
                 "topic": f"mqtt_ingest/{mqtt_user}/data",
             },
             "config_ids": config_ids,
+            "latitude": location["latitude"] if location else None,
+            "longitude": location["longitude"] if location else None,
+            "properties": properties,
         }
 
     def update_sensor_location(
         self, thing_uuid: str, project_schema: str, latitude: float, longitude: float
     ):
         """Update sensor location directly in project database."""
-        # Location is stored as JSONB properties in the project's 'thing' table
+        # Location is stored as GeoJSON in properties field in the project's 'thing' table
+        # matching the LOCATIONS view definition.
         return self.db.update_thing_properties(
             thing_uuid=thing_uuid,
-            properties={"location": {"latitude": latitude, "longitude": longitude}},
+            properties={
+                "location": {
+                    "type": "Point",
+                    "coordinates": [longitude, latitude]
+                }
+            },
         )
 
     def list_sensors(
@@ -281,10 +317,18 @@ class TimeIOOrchestratorV3:
         """List all sensors in a project with rich metadata."""
         # Identify Target Schema (same logic as create_sensor)
         schema = self.resolve_schema(project_name, project_group)
-        logger.info(
-            f"Listing sensors for project '{project_name}' from schema '{schema}'"
-        )
-        return self.db.get_sensors_rich(schema)
+        print(f"DEBUG: Listing sensors for project '{project_name}' from schema '{schema}'", flush=True)
+        
+        try:
+            sensors = self.db.get_sensors_rich(schema)
+            print(f"DEBUG: Found {len(sensors)} sensors in schema '{schema}'", flush=True)
+            if len(sensors) == 0:
+                 # Debug: Check if schema exists?
+                 print(f"DEBUG: Schema '{schema}' appears empty or invalid.", flush=True)
+            return sensors
+        except Exception as e:
+            print(f"DEBUG: Error listing sensors: {e}", flush=True)
+            return []
 
     def list_sensors_paginated(
         self,
@@ -309,6 +353,14 @@ class TimeIOOrchestratorV3:
         logger.info(
             f"Listing all sensors basic for project '{project_name}' from schema '{schema}'"
         )
+        frost_client = get_cached_frost_client(
+            base_url=settings.frost_api_url,
+            project_name=schema,
+            version=settings.frost_api_version,
+            frost_server=settings.frost_api_server,
+            timeout=settings.frost_api_timeout,
+        )
+        linked_sensors = frost_client.get_things()
         return self.db.get_all_sensors_basic(schema)
 
     def resolve_schema(
@@ -373,5 +425,69 @@ class TimeIOOrchestratorV3:
         # 4. Default Guess
         return f"project_{safe_name}_1"
 
+    def get_schema_by_project_name(self, project_name: str) -> str:
+        """Get schema name from project name."""
+        return self.db.get_tsm_db_schema_by_name(project_name)
+
+    def get_thing_observations(
+        self,
+        thing_uuid: str,
+        datastream_name: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Fetch observations for a thing."""
+        schema = self.db.get_thing_schema(thing_uuid)
+        if not schema:
+             logger.warning(f"Could not find schema for thing {thing_uuid}")
+             return []
+        
+        return self.db.get_thing_observations(schema, thing_uuid, datastream_name, limit)
+
+
+    def get_sensor_datastreams(
+        self,
+        schema: str,
+        thing_id: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get datastreams for a sensor via FROST.
+        """
+        try:
+            frost_project_client = get_cached_frost_client(
+                base_url=settings.frost_url, 
+                project_name=schema, 
+                version=settings.frost_version, 
+                frost_server=settings.frost_server
+            )
+            datastreams = frost_project_client.list_datastreams(thing_id=thing_id)
+            if not datastreams:
+                return []
+            return datastreams
+        except Exception as error:
+            raise Exception(f"Failed to fetch data from FROST: {str(error)}")
+
+    def get_sensor_observations(
+        self,
+        thing_id: str,
+        schema: str,
+        datastream_name: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get observations for a sensor via FROST.
+        """
+        try:
+            frost_project_client = get_cached_frost_client(
+                base_url=settings.frost_url, 
+                project_name=schema, 
+                version=settings.frost_version, 
+                frost_server=settings.frost_server
+            )
+            observations = frost_project_client.get_observations(thing_id=thing_id, datastream_name=datastream_name, limit=limit)
+            if not observations:
+                return []
+            return observations
+        except Exception as error:
+            raise Exception(f"Failed to fetch data from FROST: {str(error)}")
 
 orchestrator_v3 = TimeIOOrchestratorV3()

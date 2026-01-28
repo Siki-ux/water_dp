@@ -23,9 +23,17 @@ def run_migrations():
         # Run Alembic upgrade
         result = subprocess.run(
             ["alembic", "upgrade", "head"], check=False, capture_output=True, text=True
-        )  # check=False to allow proceeding if alebmic fails
+        )
+
+        if result.returncode != 0:
+             logger.error(f"Alembic failed with code {result.returncode}")
+             logger.error(f"STDOUT: {result.stdout}")
+             logger.error(f"STDERR: {result.stderr}")
+             return False
 
         logger.info(f"Alembic output: {result.stdout}")
+        if result.stderr:
+            logger.info(f"Alembic stderr: {result.stderr}")
 
         # Schema patches are now handled by Alembic revision 475f93023348
         # (consolidate_schema_patches)
@@ -33,9 +41,6 @@ def run_migrations():
         logger.info("Migrations completed successfully.")
         return True
 
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Migration failed: {e.stderr}")
-        return False
     except Exception as e:
         logger.error(f"Unexpected error during migration: {e}")
         return False

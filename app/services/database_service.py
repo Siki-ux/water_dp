@@ -214,18 +214,21 @@ class DatabaseService:
             self.db.rollback()
             raise DatabaseException(f"Failed to delete geo feature: {e}")
 
-    def get_sensors_in_layer(self, layer_name: str) -> List[Dict[str, Any]]:
+    def get_sensors_in_layer(self, layer_name: str, schema_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get all sensors (Things) that are spatially within the geometry of a layer's features.
         Fetches layer geometry from GeoServer (WFS) and uses FROST OGC Spatial Filters.
         """
+        logger.info(f"ENTER: get_sensors_in_layer for {layer_name}, schema_name: {schema_name}")
         from app.services.geoserver_service import GeoServerService
 
         # 1. Fetch features from GeoServer WFS
         try:
+            logger.info(f"Fetching features for layer {layer_name} from GeoServer...")
             gs_service = GeoServerService()
             geojson_data = gs_service.get_wfs_features(layer_name)
             features = geojson_data.get("features", [])
+            logger.info(f"Fetched {len(features)} features for layer {layer_name}.")
         except Exception as e:
             logger.error(f"Failed to fetch layer {layer_name} from GeoServer: {e}")
             return []
@@ -242,7 +245,14 @@ class DatabaseService:
                     geom = f.get("geometry")
                     if geom:
                         s = shape(geom)
-                        polygons.append(s)
+                        if not s.is_valid:
+                            s = s.buffer(0)
+                        
+                        if s.is_valid:
+                            polygons.append(s)
+                        else:
+                            fid = f.get("id", "unknown")
+                            logger.warning(f"Geometry for feature {fid} is invalid even after buffer(0). Skipping.")
                 except Exception as ex:
                     fid = f.get("id", "unknown")
                     logger.warning(f"Skipping invalid geometry in feature {fid}: {ex}")
@@ -256,90 +266,85 @@ class DatabaseService:
 
             combined = unary_union(polygons)
             minx, miny, maxx, maxy = combined.bounds
+            print(f"DEBUG_GEO: Layer {layer_name} BBOX: {minx}, {miny}, {maxx}, {maxy}")
+            logger.info(f"Layer {layer_name} BBOX: minx={minx}, miny={miny}, maxx={maxx}, maxy={maxy}")
 
-            # 4. Fetch Things from FROST using Spatial Filter (BBOX)
-            frost_url = settings.frost_url
-            if not frost_url:
-                logger.warning("FROST_URL not set, cannot retrieve sensors.")
+            # 4. Fetch Things from FROST across all projects (or specific tenant)
+            from app.models.user_context import Project
+            from app.services.thing_service import ThingService
+            
+            # Fetch projects
+            query = self.db.query(Project).filter(Project.schema_name.isnot(None))
+            if schema_name:
+                query = query.filter(Project.schema_name == schema_name)
+                
+            projects = query.all()
+            logger.info(f"Found {len(projects)} projects for sensor discovery.")
+            if not projects:
                 return []
-
-            next_link = f"{frost_url}/Things?$expand=Locations"
 
             # Construct WKT Polygon for BBOX
             wkt_polygon = f"POLYGON(({minx} {miny}, {maxx} {miny}, {maxx} {maxy}, {minx} {maxy}, {minx} {miny}))"
+            
+            # Construct FROST OGC Spatial Filter
+            filter_param = f"st_intersects(Locations/location, geography'{wkt_polygon}')"
 
-            # Append filter to FROST request
-            filter_param = (
-                f"st_intersects(Locations/location, geography'{wkt_polygon}')"
-            )
-            next_link += f"&$filter={filter_param}"
-
-            logger.debug(
-                f"Using spatial optimization for layer {layer_name}. WKT: {wkt_polygon}"
-            )
+            logger.info(f"Searching for sensors in {len(projects)} projects using spatial filter: {filter_param}")
 
             sensors = []
+            seen_iot_ids = set()
 
-            # Safety limit for pages
-            page_count = 0
-            max_pages = 50
-
-            while next_link and page_count < max_pages:
+            for project in projects:
                 try:
-                    resp = requests.get(next_link, timeout=20)
-                    if resp.status_code != 200:
-                        logger.error(f"FROST Error: {resp.status_code} {resp.text}")
-                        break
-
-                    data = resp.json()
-                    things = data.get("value", [])
-                    next_link = data.get("@iot.nextLink")
-                    page_count += 1
-
-                    for thing in things:
-                        locations = thing.get("Locations", [])
-                        if not locations:
+                    thing_service = ThingService(project.schema_name)
+                    # Use the newly added filter support
+                    project_things = thing_service.get_things(
+                        expand=["Locations", "Datastreams"], 
+                        filter=filter_param,
+                        top=1000 # Limit per project for safety
+                    )
+                    
+                    for thing_model in project_things:
+                        # Deduplicate if necessary (unlikely given schema isolation but safe)
+                        if thing_model.thing_id in seen_iot_ids:
                             continue
+                        seen_iot_ids.add(thing_model.thing_id)
 
-                        # Use first location
-                        loc_entity = locations[0]
-                        loc_geo = loc_entity.get("location")
-
-                        if not loc_geo:
-                            continue
-
-                        # Parse GeoJSON location
-                        try:
-                            # Shapely shape from dict
-                            thing_point = shape(loc_geo)
-
-                            # Check intersection with ANY layer polygon (Precise check)
+                        # Precise Check: Verify intersection with actual layer polygons (not just BBOX)
+                        if thing_model.location and thing_model.location.coordinates:
+                            thing_point = shape({
+                                "type": "Point",
+                                "coordinates": [
+                                    thing_model.location.coordinates.longitude,
+                                    thing_model.location.coordinates.latitude
+                                ]
+                            })
+                            
                             match = False
                             for poly in polygons:
                                 if poly.intersects(thing_point):
                                     match = True
                                     break
-
+                            
                             if match:
-                                sensors.append(
-                                    {
-                                        "id": str(thing.get("@iot.id")),
-                                        "name": thing.get("name"),
-                                        "description": thing.get("description"),
-                                        "latitude": thing_point.y,
-                                        "longitude": thing_point.x,
-                                    }
-                                )
-                        except Exception as ex:
-                            logger.warning(
-                                f"Failed to parse location for thing {thing.get('@iot.id')}: {ex}"
-                            )
-                            continue
+                                # Standardized dict from model
+                                sensor_dict = thing_model.model_dump()
+                                # Frontend specific mapping
+                                sensor_dict["id"] = thing_model.thing_id
+                                if thing_model.properties:
+                                    sensor_dict["station_type"] = thing_model.properties.get("station_type")
+                                
+                                # Flatten coordinates for frontend
+                                if thing_model.location and thing_model.location.coordinates:
+                                     sensor_dict["latitude"] = thing_model.location.coordinates.latitude
+                                     sensor_dict["longitude"] = thing_model.location.coordinates.longitude
+                                
+                                sensors.append(sensor_dict)
+                except Exception as project_ex:
+                    logger.error(f"Failed to fetch sensors for project {project.name} ({project.schema_name}): {project_ex}")
+                    continue
 
-                except Exception as e:
-                    logger.error(f"Error fetching from FROST: {e}")
-                    break
-
+            logger.info(f"Found {len(sensors)} sensors in layer {layer_name} across all projects.")
             return sensors
 
         except Exception as e:

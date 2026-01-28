@@ -29,13 +29,17 @@ def run_simulation_step():
 
     try:
         # 1. Fetch active simulations from Local DB
+        logger.info("Fetching active simulations from Local DB")
         active_sims = (
-            db_session.query(Simulation).filter(Simulation.is_enabled is True).all()
+            db_session.query(Simulation).filter(Simulation.is_enabled == True).all()
         )
 
         if not active_sims:
+            logger.debug("No active simulations found.")
             return
-
+        
+        logger.info(f"Found {len(active_sims)} active simulations.")
+        
         # Filter by Interval FIRST to avoid unnecessary TSM lookups
         sims_to_run = []
         now = datetime.now(timezone.utc)
@@ -44,16 +48,25 @@ def run_simulation_step():
             if sim.last_run:
                 delta = (now - sim.last_run).total_seconds()
                 interval = sim.interval_seconds or 60
+                logger.debug(f"Sim {sim.id}: last_run={sim.last_run}, delta={delta}, interval={interval}")
                 if delta < interval:
                     continue
+            else:
+                 logger.debug(f"Sim {sim.id}: First run.")
+
             sims_to_run.append(sim)
 
         if not sims_to_run:
+            logger.debug("No simulations due to run this tick.")
             return
+
+        logger.info(f"Simulations to run: {[str(s.id) for s in sims_to_run]}")
 
         # 2. Batch Fetch MQTT Configs from TSM
         thing_uuids = [s.thing_uuid for s in sims_to_run]
+        logger.debug(f"Fetching configs for things: {thing_uuids}")
         thing_configs = tsm_db.get_thing_configs_by_uuids(thing_uuids)
+        logger.debug(f"Got thing configs: {list(thing_configs.keys())}")
 
         # Connect to MQTT once for the batch
         client = mqtt.Client(client_id=f"worker-simulator-{time.time()}")
@@ -117,7 +130,7 @@ def process_single_simulation(mqtt_client: mqtt.Client, config: Any, mqtt_user: 
 
     payload_data = {}
     current_time = time.time()
-
+    logger.info(f"Processing simulation for user: {mqtt_user} and config: {config}")
     for datastream in config:
         # Expects new nested structure: {name, ..., config: {type, range, ...}}
         name = datastream.get("name")
@@ -145,7 +158,8 @@ def process_single_simulation(mqtt_client: mqtt.Client, config: Any, mqtt_user: 
         payload_data[name] = val
 
     final_payload = {"object": payload_data, "time": datetime.utcnow().isoformat()}
-
+    logger.info(f"Final payload: {final_payload}")
     if mqtt_user:
         topic = f"mqtt_ingest/{mqtt_user}/data"
         mqtt_client.publish(topic, json.dumps(final_payload), qos=0)
+        logger.info(f"Published payload to topic: {topic}")

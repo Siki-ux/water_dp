@@ -437,12 +437,13 @@ async def get_layer_geojson(
 @router.get("/layers/{layer_name}/sensors")
 async def get_sensors_in_layer(
     layer_name: str,
+    tenant: Optional[str] = Query(None, description="Schema name of the tenant (project)"),
     db: Session = Depends(get_db),
 ):
     """Get sensors (Things) within the specified layer's geometry."""
     try:
         db_service = DatabaseService(db)
-        sensors = db_service.get_sensors_in_layer(layer_name)
+        sensors = db_service.get_sensors_in_layer(layer_name, schema_name=tenant)
         return sensors
     except Exception as error:
         logger.error(f"Failed to get sensors in layer {layer_name}: {error}")

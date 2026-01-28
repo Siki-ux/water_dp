@@ -29,6 +29,10 @@ def upgrade() -> None:
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ
     );
+    """
+    )
+    op.execute(
+        """
     CREATE INDEX IF NOT EXISTS idx_simulations_thing_uuid ON simulations(thing_uuid);
     """
     )

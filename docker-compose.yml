@@ -58,12 +58,15 @@ services:
       - MAX_TIME_RANGE_DAYS=365
       - SECRET_KEY=${SECRET_KEY}
       - ACCESS_TOKEN_EXPIRE_MINUTES=30
-      - LOG_LEVEL=INFO
+      - LOG_LEVEL=DEBUG
       - KEYCLOAK_URL=${KEYCLOAK_URL:-http://keycloak:8081/keycloak}
       - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL:-http://${PUBLIC_HOSTNAME:-localhost}:8081}
       - KEYCLOAK_ADMIN_USERNAME=${KEYCLOAK_ADMIN_USERNAME:-keycloak}
       - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-keycloak}
-      - FROST_URL=http://frost:8080/FROST-Server/v1.1
+      - FROST_URL=http://frost:8080
+      - FROST_SERVER=sta
+      - FROST_VERSION=v1.1
+      - FROST_TIMEOUT=30
       - TIMEIO_DB_HOST=database
       - TIMEIO_DB_PORT=5432
       - MQTT_BROKER_HOST=mqtt-broker
@@ -88,6 +91,9 @@ services:
         condition: service_started
     volumes:
       - ./app:/app/app
+      - ./alembic:/app/alembic
+      - ./scripts:/app/scripts
+      - ./alembic.ini:/app/alembic.ini
     networks:
       - water_shared_net
       - tsm_network
@@ -97,7 +103,7 @@ services:
     build: .
     container_name: water-dp-worker
     # restart: unless-stopped
-    command: celery -A app.core.celery_app.celery_app worker -B --loglevel=info -Q imports,computations,celery
+    command: celery -A app.core.celery_app.celery_app worker -B --loglevel=debug -Q imports,computations,celery
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://${DATABASE_USER:-postgres}:${DATABASE_PASSWORD:-postgres}@postgres-app:5432/water_app
@@ -117,6 +123,7 @@ services:
       - GEOSERVER_USERNAME=${GEOSERVER_ADMIN_USER:-admin}
 
       - GEOSERVER_PASSWORD=${GEOSERVER_ADMIN_PASSWORD:-geoserver}
+      - LOG_LEVEL=DEBUG
       - SQLALCHEMY_LOG_LEVEL=WARNING
     depends_on:
       postgres-app:
@@ -127,38 +134,32 @@ services:
         condition: service_healthy
     volumes:
       - ./app:/app/app
+      - ./alembic:/app/alembic
+      - ./scripts:/app/scripts
+      - ./alembic.ini:/app/alembic.ini
     networks:
       - water_shared_net
       - tsm_network
-  # --- Seeding ---
-  # waterdp-init:
-  #   build: .
-  #   container_name: water-dp-init
-  #   restart: "no"
-  #   command: python scripts/seed_water_dp.py
-  #   env_file: .env
-  #   environment:
-  #     - DATABASE_URL=postgresql://${DATABASE_USER:-postgres}:${DATABASE_PASSWORD:-postgres}@postgres-app:5432/water_app
-  #     - FROST_URL=${FROST_URL:-http://localhost/sta/v1.1}
-  #     - GEOSERVER_URL=${GEOSERVER_URL:-http://water-dp-geoserver:8080/geoserver}
-  #     - GEOSERVER_USERNAME=${GEOSERVER_ADMIN_USER:-admin}
-  #     - GEOSERVER_PASSWORD=${GEOSERVER_ADMIN_PASSWORD:-geoserver}
-  #     - KEYCLOAK_URL=${KEYCLOAK_URL:-http://keycloak:8081/keycloak}
-  #     - KEYCLOAK_ADMIN_USERNAME=${KEYCLOAK_ADMIN_USERNAME:-keycloak}
-  #     - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-keycloak}
-  #     - SEEDING=true
-  #   depends_on:
-  #     postgres-app:
-  #       condition: service_healthy
-  #     api:
-  #       condition: service_healthy
-  #   volumes:
-  #     - ./app:/app/app
-  #     - ./scripts:/app/scripts
-  #     - ./data:/app/data
-  #   networks:
-  #     - water_shared_net
-  #     - tsm_network
+
+  water-dp-seed:
+    build: .
+    container_name: water-dp-seed
+    command: python scripts/simulate_sensors.py
+    # restart: on-failure
+    env_file: .env
+    environment:
+      - API_URL=http://water-dp-api:8000/api/v1
+      - KEYCLOAK_URL=${KEYCLOAK_URL:-http://keycloak:8081/keycloak}
+      - ADMIN_USERNAME=${SEED_ADMIN_USERNAME:-admin-siki}
+      - ADMIN_PASSWORD=${SEED_ADMIN_PASSWORD:-admin-siki}
+    depends_on:
+      api:
+        condition: service_healthy
+      postgres-app:
+        condition: service_healthy
+    networks:
+      - water_shared_net
+      - tsm_network
 
 volumes:
   postgres_app_data:

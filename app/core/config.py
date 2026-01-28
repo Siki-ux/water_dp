@@ -45,8 +45,10 @@ class Settings(BaseSettings):
     time_zone: str = Field(default="UTC", alias="TIME_ZONE")
     max_time_range_days: int = Field(default=365, alias="MAX_TIME_RANGE_DAYS")
     frost_url: str = Field(
-        default="http://frost:8080/FROST-Server/v1.1", alias="FROST_URL"
+        default="http://frost:8080", alias="FROST_URL"
     )
+    frost_server: str = Field(default="sta", alias="FROST_SERVER")
+    frost_version: str = Field(default="v1.1", alias="FROST_VERSION")
     frost_timeout: int = Field(default=30, alias="FROST_TIMEOUT")
 
     # Security

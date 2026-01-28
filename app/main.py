@@ -35,8 +35,11 @@ async def lifespan(app: FastAPI):
     app.state.startup_complete = False
 
     try:
-        init_db()
-        logger.info("Database initialized successfully")
+        # init_db()
+        # logger.info("Database initialized successfully")
+        # Migrations are handled by the entrypoint script run_migrations.py
+        # no longer calling init_db() here to avoid conflicts with Alembic
+        logger.info("Application starting (migrations assumed complete)")
 
         # Always register system datasources (infra discovery)
         from app.core.database import SessionLocal

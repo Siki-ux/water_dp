@@ -28,6 +28,10 @@ from app.schemas.user_context import (
     ProjectMemberResponse,
     ProjectUpdate,
 )
+from app.services.keycloak_service import KeycloakService
+from app.services.timeio.frost_client import get_cached_frost_client
+from app.services.thing_service import ThingService
+from app.schemas.frost.thing import Thing
 
 # Import TimeIO service layer for enhanced operations
 from app.services.timeio import (
@@ -173,6 +177,7 @@ class ProjectService:
 
         # Validate Group Membership
         auth_group_id = project_in.authorization_provider_group_id
+        schema = None
         if auth_group_id:
             # Validate: User must be a member of the group (unless admin)
             if not ProjectService._is_admin(user):
@@ -206,8 +211,37 @@ class ProjectService:
                     raise AuthorizationException(
                         message=f"You are not a member of the authorization group: {auth_group_id}"
                     )
+            # Resolve schema
+            keycloak_group_data = KeycloakService().get_group(auth_group_id)
+            if keycloak_group_data and keycloak_group_data.get("name"):
+                raw_name = keycloak_group_data["name"]
+                # Extract "MyProject" from "UFZ-TSM:MyProject"
+                if ":" in raw_name:
+                    schema_name = raw_name.split(":")[-1]
+                elif "/" in raw_name:
+                    schema_name = raw_name.split("/")[-1]
+                else:
+                    schema_name = raw_name
+                logger.info(
+                    f"Resolved project name from Keycloak: {schema_name}"
+                )
+                
 
-            logger.info(f"Creating project with authorization group: {auth_group_id}")
+                # TODO: Wont exists on first creation.
+                timeio_db = TimeIODatabase()
+                config_project = timeio_db.get_config_project_by_name(schema_name)
+                logger.info(f"Resolved config project: {config_project}")
+                if config_project and "db_schema" in config_project:
+                    schema = config_project["db_schema"]
+                else:
+                    logger.warning(
+                        f"Project {schema_name} not found in TimeIO database"
+                    )
+                    schema = None
+                
+
+
+            logger.info(f"Creating project for authorization group: {auth_group_id} and schema: {schema}")
         else:
             # [STRICT GROUP MODE]
             raise ValidationException(
@@ -219,6 +253,7 @@ class ProjectService:
             description=project_in.description,
             owner_id=user_id,
             authorization_provider_group_id=auth_group_id,
+            schema_name=schema,
         )
         db.add(db_project)
         db.flush()  # Get ID
@@ -398,337 +433,62 @@ class ProjectService:
         db.commit()
         return {"status": "removed"}
 
+
     @staticmethod
-    def list_sensors(
-        db: Session,
-        project_id: UUID,
-        user: Dict[str, Any],
-        rich: bool = False,
-        skip: int = 0,
-        limit: int = 100,
-    ) -> List[Any]:
-        # Check Access
+    def get_linked_sensors(
+        db: Session, 
+        project_id: UUID, 
+        user: Dict[str, Any], 
+        expand: list[str] = ["Locations","Datastreams"]
+    ) -> List[Thing]:
         project = ProjectService._check_access(
             db, project_id, user, required_role="viewer"
         )
 
-        # 1. Get linked UUIDs from local project_sensors table (water_dp-api database)
-        statement = select(project_sensors.c.sensor_id).where(
-            project_sensors.c.project_id == project_id
-        )
-        linked_uuids = [str(row) for row in db.execute(statement).scalars().all()]
-
-        if not linked_uuids:
-            return []
-
-        # 2. Use OrchestratorV3 for fetching sensors
-        from app.services.timeio.orchestrator_v3 import orchestrator_v3
-
-        try:
-            if rich:
-                # Use v3 Rich Orchestrator logic (all metadata + datastreams)
-                results = orchestrator_v3.list_sensors(
-                    project_name=project.name,
-                    project_group=project.authorization_provider_group_id,
-                )
-                return [t for t in results if str(t["uuid"]) in linked_uuids]
-            else:
-                # Use Paginated/Basic logic
-                results = orchestrator_v3.list_sensors_paginated(
-                    project_name=project.name,
-                    project_group=project.authorization_provider_group_id,
-                    uuids=linked_uuids,
-                    skip=skip,
-                    limit=limit,
-                )
-                return results
-
-        except Exception as error:
-            logger.error(f"Failed to fetch sensors for project {project.name}: {error}")
-            return []
-
-    @staticmethod
-    def _get_project_details_from_api(
-        project_uuid: str, token: str, project_name: str = None
-    ) -> Optional[tuple[int, str]]:
-        if not token:
-            logger.warning("_get_project_details_from_api called without token")
-            return None, None
-
-        url = f"{settings.thing_management_api_url}/project"
-        headers = {"Authorization": f"Bearer {token}"}
-        try:
-            logger.info(
-                f"Querying thing-management for project {project_uuid} at {url}"
-            )
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                items = data.get("items", data) if isinstance(data, dict) else data
-                logger.debug(
-                    f"Received {len(items) if isinstance(items, list) else 0} projects from management API"
-                )
-
-                if isinstance(items, list):
-                    # 1. Try matching by UUID
-                    for project_data in items:
-                        project_uuid_api = (
-                            project_data.get("uuid")
-                            or project_data.get("thingId")
-                            or project_data.get("projectUuid")
-                        )
-                        if str(project_uuid_api) == str(project_uuid):
-                            logger.info(
-                                f"Found match by UUID: {project_data.get('name')} (ID: {project_data.get('id')})"
-                            )
-                            return project_data.get("id"), project_data.get("name")
-
-                    # 2. Try matching by Name
-                    if project_name:
-                        target_name = project_name.lower().strip()
-                        logger.info(f"Searching for project name: '{target_name}'")
-
-                        for project_data in items:
-                            current_name = (project_data.get("name") or "").lower()
-                            auth_group_id = (
-                                project_data.get("authorization_provider_group_id") or ""
-                            ).lower()
-
-                            # Matches: exact, suffix, reverse-suffix, auth-group
-                            if (
-                                current_name == target_name
-                                or current_name.endswith(f":{target_name}")
-                                or current_name.endswith(f"/{target_name}")
-                                or target_name.endswith(f":{current_name}")
-                                or target_name.endswith(f"/{current_name}")
-                                or (
-                                    auth_group_id
-                                    and (
-                                        auth_group_id == target_name
-                                        or target_name in auth_group_id
-                                    )
-                                )
-                            ):
-                                logger.info(
-                                    f"Found project by name match: id={project_data.get('id')}, name={project_data.get('name')}"
-                                )
-                                return project_data.get("id"), project_data.get("name")
-
-                    # 3. Last resort: if only one project exists, use it? USE WITH CAUTION.
-                    # This might be dangerous in multi-project envs, but helpful in dev.
-                    # if len(items) == 1:
-                    #    logger.warning("Single project found - assuming match.")
-                    #    return items[0].get("id"), items[0].get("name")
-
-            else:
-                logger.error(
-                    f"Failed to fetch projects: {response.status_code} {response.text}"
-                )
-        except Exception as error:
-            logger.error(f"Error fetching project details from thing-management: {error}")
-
-        logger.warning(
-            f"Project {project_uuid} (name: {project_name}) not found in thing-management response"
-        )
-        return None, None
-
-    @staticmethod
-    def _resolve_project_frost_url(
-        project_id: UUID,
-        token: str,
-        project_name: str = None,
-        project_auth_groups: List[str] = None,
-    ) -> Optional[str]:
-        """
-        Resolve FROST URL using Project Authorization Group.
-        Logic: Extract group name (last part after : or /), lowercase it, and append to base Host.
-        No external API call needed if we have the group list.
-        """
-        # Determine Base Host
-        base_host = "http://frost:8080"
-        if settings.frost_url:
-            from urllib.parse import urlparse
-
-            parsed = urlparse(settings.frost_url)
-            base_host = f"{parsed.scheme}://{parsed.netloc}"
-
-        group_name = "default"
-
-        # Helper to parse group string
-        def parse_group(raw: str) -> str:
-            if not raw:
-                return ""
-            # Handle URN or Path
-            parts = raw.split(":")
-            if len(parts) > 1:
-                return parts[-1]
-            if "/" in raw:
-                return raw.split("/")[-1]
-            return raw
-
-        if project_auth_groups and len(project_auth_groups) > 0:
-            # [DEPRECATED CODE PATH] - Removing usage
-            # But method signature asked for project_auth_groups
-            # Let's support it if passed as single-item list
-            group_name = parse_group(project_auth_groups[0])
-
-            # If group_name looks like a UUID (length 36), resolve it
-            if len(group_name) == 36 and "-" in group_name:
-                try:
-                    from app.services.keycloak_service import KeycloakService
-
-                    keycloak_group = KeycloakService.get_group(group_name)
-                    if keycloak_group and keycloak_group.get("name"):
-                        logger.info(
-                            f"Resolved Keycloak Group UUID {group_name} -> {keycloak_group.get('name')}"
-                        )
-                        group_name = keycloak_group.get("name")
-                except Exception as error:
-                    logger.warning(
-                        f"Failed to resolve Keycloak group {group_name}: {error}"
-                    )
-
-        elif project_name:
-            # Fallback to project name if no group (unlikely for valid projects)
-            group_name = project_name
-
-        # Sanitize
-        # Strip UFZ-TSM: prefix if present (common in Keycloak groups)
-        clean_name = group_name.replace("UFZ-TSM:", "").replace("ufz-tsm:", "").strip()
-        slug = clean_name.lower().strip()
-
-        # Internal Docker URL does NOT use /sta/ prefix (that is for Proxy)
-        # Context is deployed at root: http://frost:8080/{schema}/v1.1
-        # Convention: usage of project_{slug}
-        if not slug.startswith("project_"):
-            slug = f"project_{slug}"
-
-        # Probe for suffix (e.g. _1, _2) since schema often includes ID
-        # Context is deployed at root: http://frost:8080/{schema}/v1.1
-
-        candidates = [slug]
-        # range 1 to 10 covers common ID schemas
-        for index in range(1, 10):
-            candidates.append(f"{slug}_{index}")
-
-        import requests
-
-        for c in candidates:
-            url = f"{base_host}/{c}/v1.1"
-            probe_url = f"{url}/Things"
-            try:
-                # Short timeout for probing
-                response = requests.get(probe_url, timeout=1, params={"$top": 1})
-                if response.status_code == 200:
-                    logger.info(f"Resolved FROST URL via probe: {url}")
-                    return url
-            except Exception:
-                pass
-
-        # Fallback to base slug if probe fails
-        url = f"{base_host}/{slug}/v1.1"
-        logger.warning(
-            f"Could not probe valid FROST URL for {group_name}, falling back to {url}"
-        )
-        return url
-
-    @staticmethod
-    def get_available_sensors(
-        db: Session,
-        project_id: UUID,
-        user: Dict[str, Any],
-        token: str = None,
-        skip: int = 0,
-        limit: int = 100,
-    ) -> List[Dict]:
-        """List sensors available in the project's FROST instance that are NOT linked in water_dp-api."""
-        # 1. Check access
-        project = ProjectService._check_access(
-            db, project_id, user, required_role="viewer"
-        )
-
-        # 2. Get currently linked sensor IDs (UUIDs) from local water_dp-api database
         statement = select(project_sensors.c.sensor_id).where(
             project_sensors.c.project_id == project_id
         )
         linked_uuids = {str(row) for row in db.execute(statement).scalars().all()}
-
-        # 3. Fetch all things from Orchestrator (Basic) which uses correct Schema
-        from app.services.timeio.orchestrator_v3 import orchestrator_v3
-
-        try:
-            # We want ALL sensors in the schema to filter them
-            # Since we don't have a "NOT IN" filter in Orchestrator yet easily exposable,
-            # We fetch basic list and filter in memory (assuming < 1000 sensors usually per project)
-            all_sensors = orchestrator_v3.list_all_sensors_basic(
-                project_name=project.name,
-                project_group=project.authorization_provider_group_id,
-            )
-        except Exception as error:
-            logger.error(
-                f"Failed to fetch available sensors for project {project.name}: {error}"
-            )
+        if not linked_uuids:
             return []
+        logger.info(f"Linked UUIDs: {linked_uuids}")
+        logger.info(f"Project schema: {project.schema_name}")
+        logger.info(f"Expand: {expand}")
+        thing_service = ThingService(project.schema_name)
+        all_sensors: List[Thing] = thing_service.get_things(expand)
 
-        available = []
-        for sensor in all_sensors:
-            # sensor is {uuid, name, description} from list_all_sensors_basic
-            thing_uuid = str(sensor.get("uuid"))
-
-            if thing_uuid not in linked_uuids:
-                # We need the FROST ID (View ID) if we want to construct links, but list_all_sensors_basic
-                # might only return UUID/Name from 'thing' table unless we joined.
-                # Actually list_all_sensors_basic returns result of get_all_sensors_basic which
-                # returns: id, name, description, properties, uuid.
-                # Check timeio_db.py get_all_sensors_basic implementation to be sure.
-
-                # Assuming sensor has 'id' (int/str) and 'uuid'
-                thing_id = sensor.get("id")
-
-                # Construct public link path (relative)
-                # We need schema name... Orchestrator resolved it but didn't return it in list.
-                # Keep it simple for now or resolve schema again.
-                # public_link = f"/sta/{schema}/v1.1/Things('{thing_id}')"
-
-                available.append(
-                    {
-                        "id": thing_id,
-                        "name": sensor["name"],
-                        "description": sensor.get("description", ""),
-                        "properties": sensor.get("properties", {}),
-                        "latitude": sensor.get("latitude"),  # Might be missing in basic
-                        "longitude": sensor.get("longitude"),
-                        # "iot_self_link": public_link
-                    }
-                )
-
-        # Pagination on the memory list
-        start = skip
-        end = skip + limit
-        return available[start:end]
+        linked_things: List[Thing] = [
+            thing for thing in all_sensors 
+            if thing.sensor_uuid in linked_uuids
+        ]
+        return linked_things
 
     @staticmethod
-    def get_allowed_sensor_ids(db: Session, user: Dict[str, Any]) -> List[str]:
-        """
-        Get ALL sensor IDs that the user is allowed to access across all projects.
-        Used for filtering global views.
-        """
-        # 1. Get Allowed Projects (Reusing list_projects logic via high limit)
-        # Note: If user has > 1000 projects, this might need pagination or optimization.
-        projects = ProjectService.list_projects(db, user, limit=1000)
-        if not projects:
-            return []
-
-        project_ids = [p.id for p in projects]
-
-        # 2. Get Sensors linked to these projects
-        statement = select(project_sensors.c.sensor_id).where(
-            project_sensors.c.project_id.in_(project_ids)
+    def get_available_sensors(
+        db: Session, 
+        project_id: UUID, 
+        user: Dict[str, Any], 
+        expand: list[str] = []
+    ) -> List[Thing]:
+        """List sensors available in the project's FROST instance that are NOT linked in water_dp-api."""
+        project = ProjectService._check_access(
+            db, project_id, user, required_role="viewer"
         )
-        result = db.execute(statement).scalars().all()
 
-        # Ensure unique list
-        return list(set([str(row) for row in result]))
+        statement = select(project_sensors.c.sensor_id).where(
+            project_sensors.c.project_id == project_id
+        )
+        linked_uuids = {str(row) for row in db.execute(statement).scalars().all()}
+        if not linked_uuids:
+            return []
+        thing_service = ThingService(project.schema_name)
+        all_sensors: List[Thing] = thing_service.get_things(expand)
+
+        available_things: List[Thing] = [
+            thing for thing in all_sensors 
+            if thing.sensor_uuid not in linked_uuids
+        ]
+        return available_things
 
     # --- Member Management ---
 

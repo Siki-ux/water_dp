@@ -125,7 +125,7 @@ def create_http_exception(exc: AppException) -> HTTPException:
     elif isinstance(exc, DatabaseException):
         return HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database operation failed",
+            detail=exc.message or "Database operation failed",
             headers={"X-Error-Details": str(exc.details)},
         )
 
@@ -139,7 +139,7 @@ def create_http_exception(exc: AppException) -> HTTPException:
     elif isinstance(exc, TimeSeriesException):
         return HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Time series processing failed",
+            detail=exc.message or "Time series processing failed",
             headers={"X-Error-Details": str(exc.details)},
         )
 

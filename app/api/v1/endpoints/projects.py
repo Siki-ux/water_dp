@@ -29,6 +29,7 @@ from app.schemas.user_context import (
 )
 from app.services.dashboard_service import DashboardService
 from app.services.project_service import ProjectService
+from app.services.timeio.timeio_db import TimeIODatabase
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -159,31 +160,24 @@ def remove_project_member(
 
 # --- Project Sensors ---
 
-
 @router.get("/{project_id}/sensors", response_model=List[Any])
 def list_project_sensors(
     project_id: UUID,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
     database: Session = Depends(get_db),
     user: dict = Depends(deps.get_current_user),
 ) -> Any:
-    """List sensors in project with basic metadata from database (Paginated)."""
-    # Use the refined listing logic from ProjectService
-    return ProjectService.list_sensors(
-        database, project_id, user, rich=False, skip=skip, limit=limit
-    )
-
+    """List sensors in project with basic metadata from database."""
+    return ProjectService.get_linked_sensors(database, project_id, user)
+    
 
 @router.get("/{project_id}/available-sensors", response_model=List[Any])
 def get_available_sensors(
     project_id: UUID,
     database: Session = Depends(get_db),
     user: dict = Depends(deps.get_current_user),
-    token: str = Depends(deps.oauth2_scheme),
 ) -> Any:
     """List sensors available in FROST that are NOT linked to this project."""
-    return ProjectService.get_available_sensors(database, project_id, user, token)
+    return ProjectService.get_available_sensors(database, project_id, user)
 
 
 @router.post("/{project_id}/sensors", response_model=ProjectSensorResponse)
